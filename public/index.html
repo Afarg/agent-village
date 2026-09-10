@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Village — エージェント可視化ダッシュボード</title>
+  <link rel="stylesheet" href="/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <header id="hud-header">
+      <h1>🏠 Agent Village</h1>
+      <span id="conn-status" class="badge badge-offline">接続待ち…</span>
+      <span id="server-time"></span>
+    </header>
+
+    <main id="hud-main">
+      <div id="game-container"></div>
+
+      <aside id="hud-sidebar">
+        <div id="tab-bar">
+          <button class="tab-btn active" data-tab="agents" type="button">エージェント</button>
+          <button class="tab-btn" data-tab="rooms" type="button">部屋</button>
+        </div>
+
+        <div id="tab-agents" class="tab-panel">
+          <h2>エージェント一覧</h2>
+          <ul id="agent-list"></ul>
+          <div id="agent-detail-panel" class="detail-panel empty">
+            <p class="hint">キャラクター、または一覧の項目をクリックすると詳細が表示されます。</p>
+          </div>
+        </div>
+
+        <div id="tab-rooms" class="tab-panel" hidden>
+          <div class="row" style="justify-content: space-between;">
+            <h2 style="margin:0;">部屋一覧</h2>
+            <button class="btn" id="room-add-toggle-btn" type="button">＋ 部屋を追加</button>
+          </div>
+          <div id="room-add-form" class="appearance-editor" hidden>
+            <div class="row">
+              <input type="text" id="room-add-label" placeholder="部屋名（例: 動画編集部屋）" />
+            </div>
+            <div class="row">
+              <input type="text" id="room-add-keywords" placeholder="判定キーワード（カンマ区切り、任意）" />
+            </div>
+            <div class="appearance-notes">キーワードを含む名前/説明のエージェントが自動的にこの部屋へ配置されます。空でも作成できます（その場合は明示的な room: 指定でのみ配置されます）。</div>
+            <div class="row">
+              <button class="btn" id="room-add-submit-btn" type="button">作成する</button>
+              <button class="btn" id="room-add-cancel-btn" type="button">キャンセル</button>
+            </div>
+            <div id="room-add-msg"></div>
+          </div>
+          <ul id="room-list"></ul>
+          <div id="room-detail-panel" class="detail-panel empty">
+            <p class="hint">部屋をクリックすると名前や見た目を編集できます。</p>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>

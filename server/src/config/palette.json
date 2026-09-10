@@ -1,0 +1,12 @@
+{
+  "red":      { "main": "#b13e53", "shade": "#73273a" },
+  "blue":     { "main": "#3b5dc9", "shade": "#29366f" },
+  "green":    { "main": "#38b764", "shade": "#257179" },
+  "yellow":   { "main": "#ffcd75", "shade": "#b8860b" },
+  "purple":   { "main": "#7b4dbb", "shade": "#4a2d80" },
+  "magenta":  { "main": "#7b4dbb", "shade": "#4a2d80" },
+  "orange":   { "main": "#ef7d57", "shade": "#a5453a" },
+  "pink":     { "main": "#e06f9d", "shade": "#9c4670" },
+  "cyan":     { "main": "#41a6f6", "shade": "#2b6cb0" },
+  "_default": { "main": "#94b0c2", "shade": "#566c86" }
+}

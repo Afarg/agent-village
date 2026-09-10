@@ -1,0 +1,29 @@
+{
+  "name": "agent-village",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Claude Code のサブエージェント群をピクセルアート風の村でキャラクターとして可視化するローカルダッシュボード。任意のプロジェクトディレクトリで起動すると、そのプロジェクトの .claude/agents を監視する。",
+  "type": "commonjs",
+  "bin": {
+    "agent-village": "./bin/agent-village.js",
+    "agent-village-hook": "./bin/agent-village-hook.js"
+  },
+  "files": [
+    "bin",
+    "server/src",
+    "public",
+    "docs/setup.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server/src/index.js",
+    "demo": "node server/scripts/demo-seed.js"
+  },
+  "dependencies": {
+    "chokidar": "^3.6.0",
+    "express": "^4.19.2",
+    "multer": "^2.0.0"
+  }
+}

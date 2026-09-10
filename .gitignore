@@ -1,0 +1,11 @@
+node_modules/
+
+# 別リポジトリとして管理するサブプロジェクト
+img_to_pixcel_app/
+ani_convert_app/
+
+# 実行時の状態（毎回生成される。定義側の rooms.json は残す）
+agents/state/*.json
+
+# ローカル環境固有の権限設定・パス情報
+.claude/settings.local.json

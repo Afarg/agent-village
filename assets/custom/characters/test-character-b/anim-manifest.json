@@ -1,0 +1,15 @@
+{
+  "characterId": "test-character-b",
+  "views": {
+    "front": {
+      "idle": [
+        "front.png",
+        "front_blink.png"
+      ],
+      "walk": [
+        "front_walk1.png",
+        "front_walk2.png"
+      ]
+    }
+  }
+}

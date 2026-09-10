@@ -1,0 +1,105 @@
+{
+  "layout": {
+    "columns": 3,
+    "cellWidth": 140,
+    "cellHeight": 120,
+    "gap": 14
+  },
+  "breakRoom": {
+    "id": "break",
+    "label": "休憩所"
+  },
+  "genericDesk": {
+    "label": "フリーデスク"
+  },
+  "rooms": [
+    {
+      "id": "reviewer",
+      "label": "コードレビュー部屋",
+      "keywords": [
+        "review",
+        "audit",
+        "critique",
+        "レビュー"
+      ]
+    },
+    {
+      "id": "tester",
+      "label": "テスト部屋",
+      "keywords": [
+        "test",
+        "qa",
+        "verify",
+        "e2e",
+        "テスト"
+      ]
+    },
+    {
+      "id": "coder",
+      "label": "コーディング部屋",
+      "keywords": [
+        "code",
+        "implement",
+        "fix",
+        "refactor",
+        "build",
+        "実装"
+      ]
+    },
+    {
+      "id": "researcher",
+      "label": "リサーチ部屋",
+      "keywords": [
+        "research",
+        "explore",
+        "search",
+        "investigate",
+        "調査"
+      ]
+    },
+    {
+      "id": "designer",
+      "label": "デザイン部屋",
+      "keywords": [
+        "design",
+        "ui",
+        "ux",
+        "art",
+        "デザイン"
+      ]
+    },
+    {
+      "id": "documenter",
+      "label": "ドキュメント部屋",
+      "keywords": [
+        "doc",
+        "write",
+        "readme",
+        "文書"
+      ]
+    },
+    {
+      "id": "planner",
+      "label": "企画部屋",
+      "keywords": [
+        "plan",
+        "architect",
+        "pm",
+        "orchestrat",
+        "設計"
+      ]
+    },
+    {
+      "id": "ops",
+      "label": "運用部屋",
+      "keywords": [
+        "deploy",
+        "infra",
+        "ci",
+        "devops",
+        "db",
+        "運用"
+      ]
+    }
+  ]
+}
