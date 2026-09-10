@@ -10,6 +10,23 @@ Claude Code のサブエージェント群を、ピクセルアート風の「�
 - 権限待ち（`PermissionRequest`）で止まっているエージェントを見逃さず、素早く気づきたいとき。
 - 開発の様子をチームや視聴者に「見せる」用途（配信・デモ・社内共有など）。
 
+## 実際の画面
+
+**Before**: hooksが無い状態だと、エージェントの状況は `agents/state/*.json` の生ログを都度確認するしかない。
+
+```json
+{
+  "agentId": "agent-creator",
+  "status": "working",
+  "task": { "title": "PDF抽出エージェントの新規作成", "progress": 0.2 },
+  "log": [{ "ts": "2026-07-30T06:59:43.381Z", "level": "info", "text": "既存エージェント一覧を確認中…" }]
+}
+```
+
+**After**: `npm start` して開いたダッシュボード。右側の一覧でエージェントの状態（作業中/待機中/割当済み）が一目で分かり、部屋の上には進捗ログの吹き出しがリアルタイムに表示される（下図は `npm run demo` のダミーデータで撮影）。
+
+![Agent Village dashboard screenshot](docs/images/dashboard.jpg)
+
 ## 図解: システム構成
 
 ```mermaid
