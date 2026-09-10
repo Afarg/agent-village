@@ -9,3 +9,6 @@ agents/state/*.json
 
 # ローカル環境固有の権限設定・パス情報
 .claude/settings.local.json
+
+# セッションの経緯・文脈の記録（人が読み返す用。CLAUDE.md「コンテキストログの保存」）
+docs/context_logs/
