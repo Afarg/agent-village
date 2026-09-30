@@ -77,6 +77,14 @@ class Store {
       this.emit("asset-change", { assetKind: msg.assetKind, id: msg.id });
     });
 
+    // docs/design/08-report-history.md — permanent report history. The
+    // store doesn't keep its own copy of the list (reports.js owns that
+    // page-local state); it's purely a relay, same as the other event types.
+    es.addEventListener("report-added", (ev) => {
+      const msg = JSON.parse(ev.data);
+      this.emit("report-added", msg);
+    });
+
     es.addEventListener("rooms-changed", () => {
       // Room rename/add/delete reshuffles the whole grid layout — simplest
       // correct behavior for every connected tab is to just reload rather

@@ -7,6 +7,9 @@ ani_convert_app/
 # 実行時の状態（毎回生成される。定義側の rooms.json は残す）
 agents/state/*.json
 
+# 永続レポート履歴（実行時に増え続ける。docs/design/08-report-history.md）
+agents/logs/*.ndjson
+
 # ローカル環境固有の権限設定・パス情報
 .claude/settings.local.json
 

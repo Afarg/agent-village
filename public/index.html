@@ -11,6 +11,10 @@
   <div id="app">
     <header id="hud-header">
       <h1>🏠 Agent Village</h1>
+      <div id="view-switcher">
+        <button class="tab-btn active" data-view="office" type="button">オフィス</button>
+        <button class="tab-btn" data-view="reports" type="button">レポート</button>
+      </div>
       <span id="conn-status" class="badge badge-offline">接続待ち…</span>
       <span id="server-time"></span>
     </header>
@@ -58,6 +62,19 @@
         </div>
       </aside>
     </main>
+
+    <section id="reports-view" hidden>
+      <div class="row" id="reports-filter-bar">
+        <select id="reports-agent-filter"><option value="">すべてのエージェント</option></select>
+        <label><input type="checkbox" class="reports-level-cb" value="info" checked /> info</label>
+        <label><input type="checkbox" class="reports-level-cb" value="warn" checked /> warn</label>
+        <label><input type="checkbox" class="reports-level-cb" value="error" checked /> error</label>
+        <label><input type="checkbox" class="reports-level-cb" value="result" checked /> result</label>
+        <input type="text" id="reports-search-input" placeholder="キーワード検索…" />
+      </div>
+      <div id="reports-list" class="detail-panel"></div>
+      <button class="btn" id="reports-load-more-btn" type="button" hidden>もっと読み込む</button>
+    </section>
   </div>
 
   <script type="module" src="/js/main.js"></script>

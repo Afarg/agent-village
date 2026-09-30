@@ -22,6 +22,7 @@ const {
 } = require("./lib/customAssets");
 const { renameAgentFile } = require("./lib/renameAgent");
 const roomsStore = require("./lib/roomsStore");
+const reportLog = require("./lib/reportLog");
 
 // See docs/design/04-multi-project-integration.md for the install-root vs.
 // target-root split this implements.
@@ -44,6 +45,7 @@ const INSTALL_ROOT = path.resolve(__dirname, "..", "..");
 const TARGET_ROOT = resolveTargetRoot();
 const AGENTS_DEF_DIR = path.join(TARGET_ROOT, ".claude", "agents");
 const AGENTS_STATE_DIR = path.join(TARGET_ROOT, "agents", "state");
+const AGENTS_LOGS_DIR = path.join(TARGET_ROOT, "agents", "logs");
 const CHARACTER_ASSET_DIR = path.join(TARGET_ROOT, "assets", "custom", "characters");
 const ROOM_ASSET_DIR = path.join(TARGET_ROOT, "assets", "custom", "rooms");
 const ROOMS_FILE = path.join(TARGET_ROOT, "agents", "config", "rooms.json");
@@ -186,14 +188,24 @@ function reloadOne(kind, filePath) {
   } else if (kind === "rooms-file") {
     roomsStore.load();
     broadcastRoomsChanged();
+  } else if (kind === "report-log") {
+    // agents/logs/*.ndjson is append-only history, not a whole-object status
+    // file like agents/state/*.json — reloadOne can't reuse the "state"
+    // branch above. reportLog.ingestFile() tails only the newly-appended
+    // bytes and returns just the new entries.
+    const added = reportLog.ingestFile(filePath);
+    for (const entry of added) sendEvent("report-added", { agentId: entry.agentId, entry });
   }
 }
 
 // ---- watchers -------------------------------------------------
 fs.mkdirSync(AGENTS_DEF_DIR, { recursive: true });
 fs.mkdirSync(AGENTS_STATE_DIR, { recursive: true });
+fs.mkdirSync(AGENTS_LOGS_DIR, { recursive: true });
 fs.mkdirSync(CHARACTER_ASSET_DIR, { recursive: true });
 fs.mkdirSync(ROOM_ASSET_DIR, { recursive: true });
+
+reportLog.loadAll(AGENTS_LOGS_DIR);
 
 // The target project doesn't necessarily have a rooms.json of its own yet —
 // bootstrap-copy the bundled default on first run (docs/design/04-multi-project-integration.md §4).
@@ -234,6 +246,14 @@ chokidar
 // Picks up hand-edits to rooms.json too, not just changes made through the API.
 chokidar.watch(ROOMS_FILE, watchOpts).on("change", () => scheduleReload("rooms-file", ROOMS_FILE));
 
+// agents/logs/*.ndjson — permanent report history (docs/design/08-report-history.md).
+// "add" fires for a brand-new agent's first-ever report line; "change" for
+// every subsequent append.
+chokidar
+  .watch(AGENTS_LOGS_DIR, watchOpts)
+  .on("add", (p) => scheduleReload("report-log", p))
+  .on("change", (p) => scheduleReload("report-log", p));
+
 // ---- http app -------------------------------------------------
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -260,6 +280,47 @@ app.get("/api/events", (req, res) => {
   req.on("close", () => {
     clients.delete(res);
   });
+});
+
+// ---- report history (docs/design/08-report-history.md) -------------------------------------------------
+const VALID_LEVELS = new Set(["info", "warn", "error", "result"]);
+
+app.get("/api/reports", (req, res) => {
+  const { agentId, level, q, since, until, cursor, limit } = req.query;
+
+  let levels;
+  if (level) {
+    levels = String(level)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const invalid = levels.find((l) => !VALID_LEVELS.has(l));
+    if (invalid) return res.status(400).json({ error: `未知のlevelです: ${invalid}` });
+  }
+
+  let limitNum = 50;
+  if (limit !== undefined) {
+    limitNum = Number(limit);
+    if (!Number.isFinite(limitNum) || limitNum <= 0) return res.status(400).json({ error: "limitは正の整数で指定してください" });
+    limitNum = Math.min(limitNum, 200);
+  }
+
+  let cursorNum;
+  if (cursor !== undefined) {
+    cursorNum = Number(cursor);
+    if (!Number.isFinite(cursorNum)) return res.status(400).json({ error: "cursorが不正です" });
+  }
+
+  const result = reportLog.query({
+    agentId: agentId || undefined,
+    levels,
+    q: q || undefined,
+    since: since || undefined,
+    until: until || undefined,
+    cursor: cursorNum,
+    limit: limitNum,
+  });
+  res.json(result);
 });
 
 // ---- agent rename -------------------------------------------------
@@ -507,6 +568,7 @@ app.listen(PORT, () => {
   console.log(`  target project:      ${TARGET_ROOT}`);
   console.log(`  watching definitions: ${AGENTS_DEF_DIR}`);
   console.log(`  watching state:       ${AGENTS_STATE_DIR}`);
+  console.log(`  watching report logs: ${AGENTS_LOGS_DIR}`);
   console.log(`  watching assets:      ${CHARACTER_ASSET_DIR}, ${ROOM_ASSET_DIR}`);
   console.log(`  rooms config:         ${ROOMS_FILE}${roomsFileWasCreated ? " (created from template)" : ""}`);
   console.log(`  agents loaded:        ${Object.keys(defs).length} (${Object.keys(defs).join(", ") || "none"})`);

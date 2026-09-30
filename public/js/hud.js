@@ -73,12 +73,33 @@ async function postJson(url, payload) {
 
 // -------------------------------------------------------- tab switch ---
 function initTabs() {
-  const buttons = document.querySelectorAll(".tab-btn");
+  // Scoped to #tab-bar specifically: .tab-btn is also reused (for its CSS)
+  // by the unrelated #view-switcher buttons added in docs/design/08-report-history.md,
+  // and an unscoped ".tab-btn" query here would wire this handler onto those
+  // too — a button with no data-tab attribute would then hide both sidebar
+  // panels on every click (found via browser verification, not theoretical).
+  const buttons = document.querySelectorAll("#tab-bar .tab-btn");
   buttons.forEach((btn) => {
     btn.addEventListener("click", () => {
       buttons.forEach((b) => b.classList.toggle("active", b === btn));
       document.getElementById("tab-agents").hidden = btn.dataset.tab !== "agents";
       document.getElementById("tab-rooms").hidden = btn.dataset.tab !== "rooms";
+    });
+  });
+}
+
+// ---------------------------------------------------- view switcher ---
+// Same hidden-attribute toggle initTabs() uses for the two sidebar tabs,
+// promoted to whole-page scope: "オフィス" (office map + sidebar) vs.
+// "レポート" (docs/design/08-report-history.md, an independent full-width
+// screen, not squeezed into the 360px sidebar).
+function initViewSwitcher() {
+  const buttons = document.querySelectorAll("#view-switcher .tab-btn");
+  buttons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      buttons.forEach((b) => b.classList.toggle("active", b === btn));
+      document.getElementById("hud-main").hidden = btn.dataset.view !== "office";
+      document.getElementById("reports-view").hidden = btn.dataset.view !== "reports";
     });
   });
 }
@@ -632,6 +653,7 @@ function renderConnection(connected) {
 
 export function initHud() {
   initTabs();
+  initViewSwitcher();
   initRoomAddForm();
 
   store.subscribe((type) => {

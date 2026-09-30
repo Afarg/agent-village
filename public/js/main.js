@@ -1,10 +1,12 @@
 import { store } from "./store.js";
 import { initGame } from "./game.js";
 import { initHud } from "./hud.js";
+import { initReports } from "./reports.js";
 
 async function bootstrap() {
   initHud();
   await store.init();
+  initReports();
   await initGame("game-container");
   store.connectSSE();
 }

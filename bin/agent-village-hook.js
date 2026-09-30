@@ -55,11 +55,45 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+// docs/design/08-report-history.md — permanent, append-only per-agent report
+// history, separate from the rolling `log` kept inside agents/state/*.json.
+function readExistingState(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null; // missing/corrupt — treat as "no prior state"
+  }
+}
+
+// docs/design/02-agent-state-model.md §4.2 — `log` is meant to be append-only,
+// keeping the most recent ~50 entries. (Previously each caller overwrote it
+// with a single-entry array instead of appending — fixed here.)
+function appendedLog(existing, entry) {
+  const prevLog = Array.isArray(existing && existing.log) ? existing.log : [];
+  return [...prevLog, entry].slice(-50);
+}
+
+function logFilePath(projectRoot, agentId) {
+  return path.join(projectRoot, "agents", "logs", `${agentId}.ndjson`);
+}
+
+// Plain append (not the temp+rename atomicWrite pattern, which is for
+// whole-file replacement): NDJSON is designed to be grown by appending, and
+// write concurrency here is low (single local dev machine).
+function appendNdjsonLine(file, obj) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, JSON.stringify(obj) + "\n", "utf8");
+}
+
 function handleSubagentStart(payload, projectRoot) {
   const agentId = slugify(payload.agent_type || "");
   if (!agentId) return;
   const now = nowIso();
-  atomicWrite(stateFilePath(projectRoot, agentId), {
+  const file = stateFilePath(projectRoot, agentId);
+  const existing = readExistingState(file);
+  const entry = { ts: now, level: "info", text: "開始しました" };
+
+  atomicWrite(file, {
     schemaVersion: 1,
     agentId,
     status: "working",
@@ -71,9 +105,10 @@ function handleSubagentStart(payload, projectRoot) {
       startedAt: now,
       progress: null,
     },
-    log: [{ ts: now, level: "info", text: "開始しました" }],
+    log: appendedLog(existing, entry),
     result: null,
   });
+  appendNdjsonLine(logFilePath(projectRoot, agentId), { ...entry, agentId, taskId: payload.agent_id || null });
 }
 
 function handleSubagentStop(payload, projectRoot, hookScriptPath) {
@@ -82,24 +117,23 @@ function handleSubagentStop(payload, projectRoot, hookScriptPath) {
   const now = nowIso();
   const file = stateFilePath(projectRoot, agentId);
 
-  let prevTask = null;
-  try {
-    prevTask = JSON.parse(fs.readFileSync(file, "utf8")).task || null;
-  } catch {
-    // No previous state file (or it's unreadable) — fine, we just won't have
-    // the original title/timestamps to carry into the "done" record.
-  }
+  // No previous state file (or it's unreadable) — fine, we just won't have
+  // the original title/timestamps/log to carry into the "done" record.
+  const existing = readExistingState(file);
+  const prevTask = (existing && existing.task) || null;
 
   const summary = String(payload.last_assistant_message || "").trim().slice(0, 300) || "完了しました";
+  const entry = { ts: now, level: "result", text: summary };
   atomicWrite(file, {
     schemaVersion: 1,
     agentId,
     status: "done",
     updatedAt: now,
     task: prevTask,
-    log: [{ ts: now, level: "result", text: summary }],
+    log: appendedLog(existing, entry),
     result: { ok: true, summary, finishedAt: now },
   });
+  appendNdjsonLine(logFilePath(projectRoot, agentId), { ...entry, agentId, taskId: payload.agent_id || null });
 
   // Returning to idle after a "done" is the writer's responsibility
   // (docs/design/02-agent-state-model.md §4.2, "doneの寿命"). Do it from a
@@ -121,10 +155,8 @@ function handlePermissionRequest(payload, projectRoot) {
   if (!agentId) return;
 
   const file = stateFilePath(projectRoot, agentId);
-  let existing;
-  try {
-    existing = JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch {
+  const existing = readExistingState(file);
+  if (!existing) {
     // No prior SubagentStart record for this agent (or it's unreadable) —
     // nothing to attach pendingPermission to. Fail soft, write nothing.
     return;
@@ -134,6 +166,18 @@ function handlePermissionRequest(payload, projectRoot) {
     ...existing,
     updatedAt: nowIso(),
     pendingPermission: { tool: String(payload.tool_name || ""), requestedAt: nowIso() },
+  });
+
+  // Permission-wait is the one extra lifecycle-adjacent event this hook can
+  // observe (see docs/design/05-hooks-state-writer.md §4 — start/stop are the
+  // only two guaranteed endpoints). Record it in the permanent report history
+  // even though it doesn't touch the rolling `log` above.
+  appendNdjsonLine(logFilePath(projectRoot, agentId), {
+    ts: nowIso(),
+    level: "warn",
+    text: `許可待ち: ${payload.tool_name || "(unknown tool)"}`,
+    agentId,
+    taskId: null,
   });
 }
 

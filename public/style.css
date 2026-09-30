@@ -75,6 +75,10 @@ body {
   min-height: 0;
 }
 
+#hud-main[hidden] {
+  display: none;
+}
+
 #game-container {
   flex: 1;
   display: flex;
@@ -145,6 +149,63 @@ body {
 
 .tab-panel[hidden] {
   display: none;
+}
+
+/* ---- view switcher (office / reports, docs/design/08-report-history.md) ---- */
+#view-switcher {
+  display: flex;
+  gap: 4px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 8px;
+  padding: 4px;
+}
+
+#reports-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 12px;
+  gap: 12px;
+}
+
+#reports-view[hidden] {
+  display: none;
+}
+
+#reports-filter-bar label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+#reports-filter-bar select,
+#reports-filter-bar input[type="text"] {
+  padding: 6px 8px;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text);
+  font-size: 12px;
+}
+
+#reports-filter-bar input[type="text"] {
+  flex: 1;
+  min-width: 160px;
+}
+
+#reports-list {
+  flex: 1;
+}
+
+.report-row .report-agent {
+  margin-right: 6px;
+}
+
+#reports-load-more-btn {
+  align-self: center;
 }
 
 /* ---- agent / room list ---- */
