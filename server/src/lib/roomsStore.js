@@ -25,6 +25,25 @@ function persist() {
   fs.writeFileSync(ROOMS_FILE, `${JSON.stringify(raw, null, 2)}\n`, "utf8");
 }
 
+// Called by the rooms.json watcher. Our own API writes trigger it too, but
+// those were already broadcast by the route that made them (decor edits in
+// place, rename/add/delete as a full reload) — so only a file whose content
+// differs from memory is a real hand-edit. Comparing against memory (not
+// against "what we last wrote") matters: a hand-edit that reverts the file to
+// our last write must still be picked up. Returns "unchanged" | "reloaded" |
+// "invalid" (unparseable JSON: the previous state is kept).
+function reloadIfChanged() {
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(ROOMS_FILE, "utf8"));
+  } catch {
+    return "invalid";
+  }
+  if (JSON.stringify(parsed) === JSON.stringify(raw)) return "unchanged";
+  raw = parsed;
+  return "reloaded";
+}
+
 function getRaw() {
   return raw;
 }
@@ -70,8 +89,81 @@ function deleteRoom(roomId) {
   return true;
 }
 
+function findRoom(roomId) {
+  if (roomId === raw.breakRoom.id) return raw.breakRoom;
+  return raw.rooms.find((r) => r.id === roomId) || null;
+}
+
+// `changes`: { [slotId]: partId | null } (docs/design/09 §6.2). floor/wall/rug
+// are stored at the top level of `decor`, everything else under `decor.slots`.
+// Slots not mentioned keep their current value (or the theme default).
+function setRoomDecor(roomId, changes, topLevelSlots) {
+  const room = findRoom(roomId);
+  if (!room) return null;
+  const decor = room.decor || {};
+  for (const [slotId, partId] of Object.entries(changes)) {
+    if (topLevelSlots.has(slotId)) {
+      decor[slotId] = partId;
+    } else {
+      decor.slots = decor.slots || {};
+      decor.slots[slotId] = partId;
+    }
+  }
+  room.decor = decor;
+  persist();
+  return room.decor;
+}
+
+function resetRoomDecor(roomId) {
+  const room = findRoom(roomId);
+  if (!room) return false;
+  delete room.decor;
+  persist();
+  return true;
+}
+
+// After a part is deleted from the library, drop every reference to it so
+// those slots fall back to the room's theme default. Returns affected room ids.
+function clearPartReferences(partId) {
+  const affected = [];
+  for (const room of [raw.breakRoom, ...raw.rooms]) {
+    const decor = room.decor;
+    if (!decor) continue;
+    let hit = false;
+    for (const key of ["floor", "wall", "rug"]) {
+      if (decor[key] === partId) {
+        delete decor[key];
+        hit = true;
+      }
+    }
+    for (const [slotId, value] of Object.entries(decor.slots || {})) {
+      if (value === partId) {
+        delete decor.slots[slotId];
+        hit = true;
+      }
+    }
+    if (hit) affected.push(room.id);
+  }
+  if (affected.length) persist();
+  return affected;
+}
+
 function allRoomIds() {
   return new Set([raw.breakRoom.id, ...raw.rooms.map((r) => r.id)]);
 }
 
-module.exports = { init, load, getRaw, getComputed, renameRoom, addRoom, deleteRoom, allRoomIds };
+module.exports = {
+  init,
+  load,
+  getRaw,
+  getComputed,
+  reloadIfChanged,
+  renameRoom,
+  addRoom,
+  deleteRoom,
+  findRoom,
+  setRoomDecor,
+  resetRoomDecor,
+  clearPartReferences,
+  allRoomIds,
+};

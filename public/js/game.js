@@ -110,6 +110,7 @@ class VillageScene extends Phaser.Scene {
     this.deskSlotIndex = new Map(); // roomId -> Map(agentId -> slot index)
     this.roomVisuals = new Map(); // roomId -> { bg, border, labelText, rect }
     this.textureVersion = new Map(); // key -> current texture key in use (for cleanup on swap)
+    this.customPartUrls = new Map(); // custom part id -> url its texture was loaded from
 
     // Character on-screen size (logical px), for both placeholder and custom
     // sprites. Design rule (2026-08-17 user feedback: uploaded character art
@@ -142,6 +143,7 @@ class VillageScene extends Phaser.Scene {
     for (const room of this.allRoomDefs()) {
       if (room.tileUrl) this.applyRoomTile(room.id, room.tileUrl);
     }
+    this.syncCustomParts();
   }
 
   allRoomDefs() {
@@ -164,10 +166,12 @@ class VillageScene extends Phaser.Scene {
   }
 
   // Resolves a part id to a loaded texture key, falling back to the first
-  // built-in part of the same category (e.g. an uploaded image that's missing).
+  // built-in part of the same category (e.g. an uploaded image that's missing
+  // or still loading).
   partTexture(partId, category) {
     if (!partId) return null;
-    if (this.textures.exists(partId)) return partId;
+    const usable = partId.startsWith("custom:") ? this.customPartUrls.has(partId) : this.textures.exists(partId);
+    if (usable) return partId;
     const fallback = PARTS.find((p) => p.category === category);
     return fallback ? fallback.id : null;
   }
@@ -222,6 +226,55 @@ class VillageScene extends Phaser.Scene {
     add(this.add.rectangle(x, y, w, h).setOrigin(0, 0).setStrokeStyle(1, DECOR_COLORS.out).setDepth(DEPTH.header));
 
     this.roomVisuals.set(room.id, { labelText, rect: room.rect, objects, tileImage: null });
+  }
+
+  // Rebuilds one room's decor in place (docs/design/09 §7: panel edits show
+  // immediately, without the full reload that rooms-changed does).
+  redrawRoom(roomId) {
+    // store.rooms is replaced wholesale on some events (refreshRooms), so the
+    // current decor is read from there; geometry is identical either way.
+    const room = store.findRoom(roomId) || this.allRoomDefs().find((r) => r.id === roomId);
+    const visual = this.roomVisuals.get(roomId);
+    if (!room || !visual) return;
+    for (const obj of visual.objects) obj.destroy();
+    if (visual.tileImage) visual.tileImage.destroy();
+    this.drawRoom(room);
+    if (room.tileUrl) this.applyRoomTile(roomId, room.tileUrl);
+  }
+
+  // Loads every uploaded decor part as a texture keyed by its part id, then
+  // redraws all rooms. Parts removed from the library (or replaced on disk,
+  // i.e. a new ?v= url) have their old texture dropped *after* the redraw so
+  // no live image is left pointing at a destroyed texture.
+  syncCustomParts() {
+    const library = store.decor ? Object.values(store.decor.custom).flat() : [];
+    const wanted = new Map(library.map((p) => [p.id, p.url]));
+    const stale = [...this.customPartUrls.keys()].filter((id) => wanted.get(id) !== this.customPartUrls.get(id));
+    for (const id of stale) this.customPartUrls.delete(id);
+
+    const toLoad = [...wanted].filter(([id]) => !this.customPartUrls.has(id));
+    const finish = () => {
+      for (const room of this.allRoomDefs()) this.redrawRoom(room.id);
+      for (const id of stale) if (!this.customPartUrls.has(id) && this.textures.exists(id)) this.textures.remove(id);
+    };
+    if (toLoad.length === 0) {
+      if (stale.length) finish();
+      return;
+    }
+
+    // A file replaced on disk keeps its part id: rooms are redrawn with the
+    // fallback part first so the old texture can be dropped and reloaded.
+    const replaced = toLoad.filter(([id]) => this.textures.exists(id));
+    if (replaced.length) {
+      for (const room of this.allRoomDefs()) this.redrawRoom(room.id);
+      for (const [id] of replaced) this.textures.remove(id);
+    }
+    for (const [id, url] of toLoad) this.load.image(id, url);
+    this.load.once("complete", () => {
+      for (const [id, url] of toLoad) if (this.textures.exists(id)) this.customPartUrls.set(id, url);
+      finish();
+    });
+    if (!this.load.isLoading()) this.load.start();
   }
 
   // -------------------------------------------------------- room tiles ---
@@ -816,6 +869,10 @@ class VillageScene extends Phaser.Scene {
     } else if (type === "asset-change") {
       if (data.assetKind === "character") this.refreshCharacterAsset(data.id);
       else if (data.assetKind === "room") this.refreshRoomAsset(data.id);
+    } else if (type === "room-decor") {
+      for (const roomId of data.roomIds) this.redrawRoom(roomId);
+    } else if (type === "decor-library") {
+      this.syncCustomParts();
     }
   }
 }
@@ -831,7 +888,7 @@ function computeZoom(canvas, containerEl) {
 }
 
 export async function initGame(containerId) {
-  await store.ensureRooms();
+  await Promise.all([store.ensureRooms(), store.ensureDecor()]);
   const roomsConfig = store.rooms;
   const containerEl = document.getElementById(containerId);
   const zoom = computeZoom(roomsConfig.canvas, containerEl);

@@ -22,6 +22,7 @@ const {
 } = require("./lib/customAssets");
 const { renameAgentFile } = require("./lib/renameAgent");
 const roomsStore = require("./lib/roomsStore");
+const decorStore = require("./lib/decorStore");
 const reportLog = require("./lib/reportLog");
 
 // See docs/design/04-multi-project-integration.md for the install-root vs.
@@ -48,6 +49,8 @@ const AGENTS_STATE_DIR = path.join(TARGET_ROOT, "agents", "state");
 const AGENTS_LOGS_DIR = path.join(TARGET_ROOT, "agents", "logs");
 const CHARACTER_ASSET_DIR = path.join(TARGET_ROOT, "assets", "custom", "characters");
 const ROOM_ASSET_DIR = path.join(TARGET_ROOT, "assets", "custom", "rooms");
+const DECOR_ASSET_DIR = path.join(TARGET_ROOT, "assets", "custom", "decor");
+const DECOR_URL_PREFIX = "/assets/custom/decor";
 const ROOMS_FILE = path.join(TARGET_ROOT, "agents", "config", "rooms.json");
 const ROOMS_TEMPLATE_FILE = path.join(__dirname, "config", "rooms.default.json");
 const PUBLIC_DIR = path.join(INSTALL_ROOT, "public");
@@ -97,6 +100,17 @@ function roomsWithAssets() {
   };
 }
 
+// Uploaded decor parts + the image spec per category (docs/design/09 §5-§6).
+function decorLibrary() {
+  return {
+    spec: decorStore.DECOR_SPEC,
+    maxBytes: decorStore.DECOR_MAX_BYTES,
+    minSize: decorStore.DECOR_MIN_SIZE,
+    slots: decorStore.DECOR_SLOTS,
+    custom: decorStore.listCustomParts(DECOR_ASSET_DIR, DECOR_URL_PREFIX),
+  };
+}
+
 // ---- SSE clients -------------------------------------------------
 const clients = new Set();
 
@@ -125,6 +139,17 @@ function broadcastAssetChange(assetKind, id) {
 // re-layout.
 function broadcastRoomsChanged() {
   sendEvent("rooms-changed", { serverTime: new Date().toISOString() });
+}
+
+// Decor edits don't move anything, so unlike rooms-changed they're applied in
+// place by the client (only the affected rooms are redrawn, no page reload).
+function broadcastRoomDecorChanged(roomIds) {
+  const rooms = roomIds.map((id) => ({ id, decor: (roomsStore.findRoom(id) || {}).decor || null }));
+  if (rooms.length) sendEvent("room-decor-changed", { rooms });
+}
+
+function broadcastDecorLibraryChanged() {
+  sendEvent("decor-library-changed", { serverTime: new Date().toISOString() });
 }
 
 // ---- debounce helpers -------------------------------------------------
@@ -186,9 +211,12 @@ function reloadOne(kind, filePath) {
     broadcastAssetChange("character", agentId);
   } else if (kind === "room-asset") {
     broadcastAssetChange("room", path.basename(filePath, ".png"));
+  } else if (kind === "decor-asset") {
+    broadcastDecorLibraryChanged();
   } else if (kind === "rooms-file") {
-    roomsStore.load();
-    broadcastRoomsChanged();
+    const result = roomsStore.reloadIfChanged();
+    if (result === "invalid") console.warn(`[watch] failed to parse ${filePath}, keeping previous rooms config`);
+    if (result === "reloaded") broadcastRoomsChanged();
   } else if (kind === "report-log") {
     // agents/logs/*.ndjson is append-only history, not a whole-object status
     // file like agents/state/*.json — reloadOne can't reuse the "state"
@@ -205,6 +233,7 @@ fs.mkdirSync(AGENTS_STATE_DIR, { recursive: true });
 fs.mkdirSync(AGENTS_LOGS_DIR, { recursive: true });
 fs.mkdirSync(CHARACTER_ASSET_DIR, { recursive: true });
 fs.mkdirSync(ROOM_ASSET_DIR, { recursive: true });
+fs.mkdirSync(DECOR_ASSET_DIR, { recursive: true });
 
 reportLog.loadAll(AGENTS_LOGS_DIR);
 
@@ -243,6 +272,14 @@ chokidar
   .on("add", (p) => scheduleReload("room-asset", p))
   .on("change", (p) => scheduleReload("room-asset", p))
   .on("unlink", (p) => scheduleReload("room-asset", p));
+
+// Decor parts can also be dropped into assets/custom/decor/<category>/ by hand.
+// All changes collapse into one debounced "library changed" (same key).
+chokidar
+  .watch(DECOR_ASSET_DIR, watchOpts)
+  .on("add", () => scheduleReload("decor-asset", DECOR_ASSET_DIR))
+  .on("change", () => scheduleReload("decor-asset", DECOR_ASSET_DIR))
+  .on("unlink", () => scheduleReload("decor-asset", DECOR_ASSET_DIR));
 
 // Picks up hand-edits to rooms.json too, not just changes made through the API.
 chokidar.watch(ROOMS_FILE, watchOpts).on("change", () => scheduleReload("rooms-file", ROOMS_FILE));
@@ -551,6 +588,61 @@ app.delete("/api/rooms/:roomId/tile", (req, res) => {
   res.json({ ok: true });
 });
 
+// ---- decor part library (docs/design/09-ai-office-redesign.md §6.3) -------------------------------------------------
+app.get("/api/decor", (req, res) => {
+  res.json(decorLibrary());
+});
+
+app.post("/api/decor/:category", upload.single("image"), (req, res) => {
+  const { category } = req.params;
+  const error = decorStore.validateDecorImage(category, req.file);
+  if (error) return res.status(400).json({ error });
+
+  const name = decorStore.saveCustomPart(DECOR_ASSET_DIR, category, req.file.originalname, req.file.buffer);
+  const partId = `custom:${category}/${name}`;
+  broadcastDecorLibraryChanged();
+  const part = decorLibrary().custom[category].find((p) => p.id === partId);
+  res.json({ ok: true, part });
+});
+
+app.delete("/api/decor/:category/:name", (req, res) => {
+  const { category, name } = req.params;
+  if (!decorStore.removeCustomPart(DECOR_ASSET_DIR, category, name)) {
+    return res.status(404).json({ error: `部品が見つかりません: custom:${category}/${name}` });
+  }
+  // Rooms that used it fall back to their theme default (§6.3).
+  const affected = roomsStore.clearPartReferences(`custom:${category}/${name}`);
+  broadcastDecorLibraryChanged();
+  broadcastRoomDecorChanged(affected);
+  res.json({ ok: true, affectedRooms: affected });
+});
+
+// Body: { changes: { [slotId]: partId | null } } — only the listed slots change.
+app.put("/api/rooms/:roomId/decor", (req, res) => {
+  const { roomId } = req.params;
+  if (!roomsStore.findRoom(roomId)) return res.status(404).json({ error: `未知の部屋です: ${roomId}` });
+  const changes = req.body && req.body.changes;
+  if (!changes || typeof changes !== "object" || Array.isArray(changes) || Object.keys(changes).length === 0) {
+    return res.status(400).json({ error: "変更内容（changes）がありません" });
+  }
+  for (const [slotId, partId] of Object.entries(changes)) {
+    const error = decorStore.validateSlotValue(DECOR_ASSET_DIR, slotId, partId);
+    if (error) return res.status(400).json({ error });
+  }
+
+  const decor = roomsStore.setRoomDecor(roomId, changes, decorStore.TOP_LEVEL_SLOTS);
+  broadcastRoomDecorChanged([roomId]);
+  res.json({ ok: true, decor });
+});
+
+// "この部屋を初期状態に戻す" — back to the room's theme defaults.
+app.delete("/api/rooms/:roomId/decor", (req, res) => {
+  const { roomId } = req.params;
+  if (!roomsStore.resetRoomDecor(roomId)) return res.status(404).json({ error: `未知の部屋です: ${roomId}` });
+  broadcastRoomDecorChanged([roomId]);
+  res.json({ ok: true });
+});
+
 app.use("/assets/custom", express.static(path.join(TARGET_ROOT, "assets", "custom")));
 app.use(express.static(PUBLIC_DIR));
 
@@ -570,7 +662,7 @@ app.listen(PORT, () => {
   console.log(`  watching definitions: ${AGENTS_DEF_DIR}`);
   console.log(`  watching state:       ${AGENTS_STATE_DIR}`);
   console.log(`  watching report logs: ${AGENTS_LOGS_DIR}`);
-  console.log(`  watching assets:      ${CHARACTER_ASSET_DIR}, ${ROOM_ASSET_DIR}`);
+  console.log(`  watching assets:      ${CHARACTER_ASSET_DIR}, ${ROOM_ASSET_DIR}, ${DECOR_ASSET_DIR}`);
   console.log(`  rooms config:         ${ROOMS_FILE}${roomsFileWasCreated ? " (created from template)" : ""}`);
   console.log(`  agents loaded:        ${Object.keys(defs).length} (${Object.keys(defs).join(", ") || "none"})`);
 

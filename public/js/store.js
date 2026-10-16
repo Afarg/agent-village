@@ -3,6 +3,7 @@ class Store {
   constructor() {
     this.agents = new Map(); // agentId -> AgentCharacter
     this.rooms = null; // rooms.json + tileUrl, see /api/rooms
+    this.decor = null; // uploaded decor parts + image spec, see /api/decor
     this.selectedAgentId = null;
     this.selectedRoomId = null;
     this.connected = false;
@@ -37,6 +38,29 @@ class Store {
       this.rooms = await res.json();
     }
     return this.rooms;
+  }
+
+  async ensureDecor() {
+    if (!this.decor) await this.refreshDecor();
+    return this.decor;
+  }
+
+  async refreshDecor() {
+    const res = await fetch("/api/decor");
+    this.decor = await res.json();
+    this.emit("decor-library", { decor: this.decor });
+    return this.decor;
+  }
+
+  // Uploaded parts of one category (built-ins live in decor/parts.js).
+  customParts(category) {
+    return (this.decor && this.decor.custom && this.decor.custom[category]) || [];
+  }
+
+  findRoom(roomId) {
+    if (!this.rooms) return null;
+    if (this.rooms.breakRoom.id === roomId) return this.rooms.breakRoom;
+    return this.rooms.rooms.find((r) => r.id === roomId) || null;
   }
 
   async refreshRooms() {
@@ -83,6 +107,24 @@ class Store {
     es.addEventListener("report-added", (ev) => {
       const msg = JSON.parse(ev.data);
       this.emit("report-added", msg);
+    });
+
+    // docs/design/09 §6-§7: decor edits are applied in place (no reload).
+    es.addEventListener("room-decor-changed", (ev) => {
+      const msg = JSON.parse(ev.data);
+      const roomIds = [];
+      for (const { id, decor } of msg.rooms) {
+        const room = this.findRoom(id);
+        if (!room) continue;
+        if (decor) room.decor = decor;
+        else delete room.decor;
+        roomIds.push(id);
+      }
+      this.emit("room-decor", { roomIds });
+    });
+
+    es.addEventListener("decor-library-changed", () => {
+      this.refreshDecor();
     });
 
     es.addEventListener("rooms-changed", () => {

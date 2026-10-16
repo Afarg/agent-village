@@ -492,3 +492,117 @@ body {
   color: var(--working);
   margin-top: 6px;
 }
+
+/* ---- room decor editor (docs/design/09-ai-office-redesign.md §7) ---- */
+.decor-editor {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.decor-row {
+  display: grid;
+  grid-template-columns: 40px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border: 1px dashed transparent;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.decor-row.drag-over {
+  border-color: var(--assigned);
+  background: rgba(255, 205, 117, 0.12);
+}
+
+.decor-thumb {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.decor-thumb img {
+  max-width: 40px;
+  max-height: 40px;
+  image-rendering: pixelated;
+}
+
+.decor-thumb span {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.decor-main {
+  min-width: 0;
+}
+
+.decor-label {
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+
+.decor-spec {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.decor-select {
+  width: 100%;
+  padding: 3px 4px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.decor-select option,
+.decor-select optgroup {
+  background: var(--panel);
+}
+
+.decor-upload-btn {
+  padding: 4px 8px;
+}
+
+.decor-library summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 4px 0;
+}
+
+.decor-library ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.decor-library li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.decor-library li img {
+  max-width: 32px;
+  max-height: 32px;
+  image-rendering: pixelated;
+}
+
+.decor-library li span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

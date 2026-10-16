@@ -437,3 +437,30 @@ export function registerBuiltinParts(scene) {
     g.destroy();
   }
 }
+
+// Renders a built-in part to a data: URL for the room panel's thumbnails,
+// without Phaser — parts only ever call fillStyle/fillRect, so a tiny
+// adapter over a 2D canvas reproduces them pixel for pixel.
+const thumbnailCache = new Map();
+export function builtinPartDataUrl(partId) {
+  if (thumbnailCache.has(partId)) return thumbnailCache.get(partId);
+  const p = PART_BY_ID.get(partId);
+  if (!p) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = p.w;
+  canvas.height = p.h;
+  const ctx = canvas.getContext("2d");
+  const g = {
+    fillStyle(color, alpha = 1) {
+      ctx.fillStyle = `#${color.toString(16).padStart(6, "0")}`;
+      ctx.globalAlpha = alpha;
+    },
+    fillRect(x, y, w, h) {
+      ctx.fillRect(x, y, w, h);
+    },
+  };
+  p.draw(g);
+  const url = canvas.toDataURL("image/png");
+  thumbnailCache.set(partId, url);
+  return url;
+}

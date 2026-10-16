@@ -1,4 +1,6 @@
 import { store } from "./store.js";
+import { PARTS, builtinPartDataUrl } from "./decor/parts.js";
+import { resolveDecor } from "./decor/themes.js";
 
 const STATUS_LABEL = {
   idle: "待機中",
@@ -563,6 +565,205 @@ function attachRoomAppearanceHandlers(roomId) {
   }
 }
 
+// ------------------------------------------------------- room decor ---
+// docs/design/09-ai-office-redesign.md §7: one row per slot, each with a
+// dropdown (built-in + uploaded parts) and a drop target for a new PNG.
+const DECOR_ROW_LABEL = {
+  floor: "床",
+  wall: "壁",
+  rug: "敷物",
+  wall1: "壁飾り（左）",
+  wall2: "壁飾り（中央）",
+  wall3: "壁飾り（右）",
+  desk: "机（4台共通）",
+  chair: "椅子（4台共通）",
+  side1: "脇置き（左）",
+  side2: "脇置き（右）",
+};
+const TOP_LEVEL_DECOR = new Set(["floor", "wall", "rug"]);
+
+// Survives the panel rebuild that the resulting room-decor SSE event triggers.
+let decorFlash = null; // { roomId, html }
+
+function setDecorFlash(roomId, html) {
+  decorFlash = { roomId, html };
+  const el = document.getElementById("decor-msg");
+  if (el) el.innerHTML = html;
+}
+
+function decorValue(decor, slotId) {
+  return TOP_LEVEL_DECOR.has(slotId) ? decor[slotId] : decor.slots[slotId];
+}
+
+function decorSpecNote(spec) {
+  const size = spec.exact ? `${spec.w}×${spec.h}px` : `最大${spec.w}×${spec.h}px`;
+  return spec.opaque ? `${size}・透過不可` : size;
+}
+
+function partOptions(category) {
+  const builtin = PARTS.filter((p) => p.category === category).map((p) => ({ id: p.id, label: p.label, thumb: builtinPartDataUrl(p.id) }));
+  const custom = store.customParts(category).map((p) => ({ id: p.id, label: `アップロード: ${p.name}`, thumb: p.url }));
+  return { builtin, custom };
+}
+
+function roomDecorEditorHtml(room) {
+  const lib = store.decor;
+  if (!lib) return `<p class="hint">部品ライブラリを読み込み中…</p>`;
+  const raw = store.findRoom(room.id);
+  const current = resolveDecor(raw);
+  const defaults = resolveDecor({ id: room.id });
+
+  const rows = lib.slots
+    .filter((slot) => !(room.isBreak && slot.id === "chair")) // the break room's table has no chairs
+    .map((slot) => {
+      const spec = lib.spec[slot.category];
+      const value = decorValue(current, slot.id);
+      const def = decorValue(defaults, slot.id);
+      const { builtin, custom } = partOptions(slot.category);
+      const selected = [...builtin, ...custom].find((o) => o.id === value);
+      const opt = (o) =>
+        `<option value="${escapeHtml(o.id)}" ${o.id === value ? "selected" : ""}>${escapeHtml(o.label)}${o.id === def ? "（既定）" : ""}</option>`;
+      const label = room.isBreak && slot.id === "desk" ? "テーブル" : DECOR_ROW_LABEL[slot.id];
+      return `
+        <div class="decor-row" data-slot="${slot.id}" data-category="${slot.category}">
+          <div class="decor-thumb">${selected ? `<img src="${escapeHtml(selected.thumb)}" alt="" />` : `<span>なし</span>`}</div>
+          <div class="decor-main">
+            <div class="decor-label">${label} <span class="decor-spec">${decorSpecNote(spec)}</span></div>
+            <select class="decor-select" data-slot="${slot.id}">
+              ${slot.nullable ? `<option value="" ${value ? "" : "selected"}>なし${def ? "" : "（既定）"}</option>` : ""}
+              <optgroup label="標準の部品">${builtin.map(opt).join("")}</optgroup>
+              ${custom.length ? `<optgroup label="アップロードした部品">${custom.map(opt).join("")}</optgroup>` : ""}
+            </select>
+          </div>
+          <button class="btn decor-upload-btn" type="button" title="PNGをこの行にドラッグ＆ドロップしても登録できます">画像…</button>
+        </div>
+      `;
+    })
+    .join("");
+
+  const customAll = Object.entries(lib.custom).flatMap(([category, parts]) => parts.map((p) => ({ ...p, category })));
+  const libraryHtml = customAll.length
+    ? `<details class="decor-library">
+        <summary>アップロードした部品（${customAll.length}）</summary>
+        <ul>
+          ${customAll
+            .map(
+              (p) => `<li><img src="${escapeHtml(p.url)}" alt="" /><span>${escapeHtml(lib.spec[p.category].label)}: ${escapeHtml(p.name)}</span>
+                <button class="btn btn-danger decor-delete-btn" data-category="${p.category}" data-name="${escapeHtml(p.name)}" type="button">削除</button></li>`
+            )
+            .join("")}
+        </ul>
+        <div class="appearance-notes">削除すると、その部品を使っている部屋は既定の部品に戻ります。</div>
+      </details>`
+    : "";
+
+  const flash = decorFlash && decorFlash.roomId === room.id ? decorFlash.html : "";
+  return `
+    <div class="decor-editor">
+      ${rows}
+      <input type="file" id="decor-file" accept="image/png" hidden />
+      <div class="appearance-notes">PNG形式・${fmtKB(lib.maxBytes)}以下。行に画像をドラッグ＆ドロップするか「画像…」で選ぶと、規格を確認してから登録し、その場所に置きます。</div>
+      <div id="decor-msg">${flash}</div>
+      <div class="row">
+        <button class="btn" id="decor-reset-btn" type="button" ${raw && raw.decor ? "" : "disabled"}>この部屋を初期状態に戻す</button>
+      </div>
+      ${libraryHtml}
+    </div>
+  `;
+}
+
+async function putRoomDecor(roomId, changes) {
+  const res = await fetch(`/api/rooms/${roomId}/decor`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ changes }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `保存に失敗しました（HTTP ${res.status}）`);
+  return body;
+}
+
+async function uploadDecorToSlot(roomId, slotId, category, file) {
+  if (!file) return;
+  setDecorFlash(roomId, `<div class="appearance-notes">「${escapeHtml(file.name)}」を確認しています…</div>`);
+  try {
+    const { part } = await postFile(`/api/decor/${category}`, "image", file);
+    await store.refreshDecor(); // so the new part is in the dropdown before the room points at it
+    await putRoomDecor(roomId, { [slotId]: part.id });
+    setDecorFlash(roomId, `<div class="appearance-success">✓ 登録して「${escapeHtml(DECOR_ROW_LABEL[slotId])}」に置きました</div>`);
+  } catch (err) {
+    setDecorFlash(roomId, `<div class="appearance-error">${escapeHtml(err.message)}</div>`);
+  }
+}
+
+function attachRoomDecorHandlers(roomId) {
+  const fileInput = document.getElementById("decor-file");
+  if (!fileInput) return;
+  let pendingRow = null;
+
+  for (const select of document.querySelectorAll("#room-detail-panel .decor-select")) {
+    select.addEventListener("change", async () => {
+      select.disabled = true;
+      try {
+        await putRoomDecor(roomId, { [select.dataset.slot]: select.value || null });
+        setDecorFlash(roomId, "");
+      } catch (err) {
+        setDecorFlash(roomId, `<div class="appearance-error">${escapeHtml(err.message)}</div>`);
+        select.disabled = false;
+      }
+    });
+  }
+
+  for (const row of document.querySelectorAll("#room-detail-panel .decor-row")) {
+    const { slot, category } = row.dataset;
+    row.querySelector(".decor-upload-btn").addEventListener("click", () => {
+      pendingRow = { slot, category };
+      fileInput.value = "";
+      fileInput.click();
+    });
+    row.addEventListener("dragover", (ev) => {
+      if (!ev.dataTransfer || !Array.from(ev.dataTransfer.types).includes("Files")) return;
+      ev.preventDefault();
+      row.classList.add("drag-over");
+    });
+    row.addEventListener("dragleave", () => row.classList.remove("drag-over"));
+    row.addEventListener("drop", (ev) => {
+      ev.preventDefault();
+      row.classList.remove("drag-over");
+      uploadDecorToSlot(roomId, slot, category, ev.dataTransfer.files[0]);
+    });
+  }
+
+  fileInput.addEventListener("change", () => {
+    if (pendingRow) uploadDecorToSlot(roomId, pendingRow.slot, pendingRow.category, fileInput.files[0]);
+  });
+
+  const resetBtn = document.getElementById("decor-reset-btn");
+  resetBtn.addEventListener("click", async () => {
+    resetBtn.disabled = true;
+    try {
+      await deleteAsset(`/api/rooms/${roomId}/decor`);
+      setDecorFlash(roomId, `<div class="appearance-success">✓ 初期状態に戻しました</div>`);
+    } catch (err) {
+      setDecorFlash(roomId, `<div class="appearance-error">${escapeHtml(err.message)}</div>`);
+      resetBtn.disabled = false;
+    }
+  });
+
+  for (const btn of document.querySelectorAll("#room-detail-panel .decor-delete-btn")) {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try {
+        await deleteAsset(`/api/decor/${btn.dataset.category}/${btn.dataset.name}`);
+        setDecorFlash(roomId, `<div class="appearance-success">✓ 部品「${escapeHtml(btn.dataset.name)}」を削除しました</div>`);
+      } catch (err) {
+        setDecorFlash(roomId, `<div class="appearance-error">${escapeHtml(err.message)}</div>`);
+        btn.disabled = false;
+      }
+    });
+  }
+}
+
 function renderRoomDetail() {
   const panel = document.getElementById("room-detail-panel");
   const room = store.selectedRoomId ? allRooms().find((r) => r.id === store.selectedRoomId) : null;
@@ -586,7 +787,10 @@ function renderRoomDetail() {
     <h4>名前</h4>
     ${roomRenameHtml(room)}
 
-    <h4>見た目</h4>
+    <h4>内装</h4>
+    ${roomDecorEditorHtml(room)}
+
+    <h4>背景画像（全面・旧方式）</h4>
     ${roomAppearanceEditorHtml(room)}
 
     <h4>削除</h4>
@@ -594,6 +798,7 @@ function renderRoomDetail() {
   `;
 
   attachRoomRenameHandlers(room.id);
+  attachRoomDecorHandlers(room.id);
   attachRoomAppearanceHandlers(room.id);
   attachRoomDeleteHandlers(room.id);
   panel.scrollTop = scrollTop;
@@ -656,13 +861,23 @@ export function initHud() {
   initViewSwitcher();
   initRoomAddForm();
 
-  store.subscribe((type) => {
+  store.subscribe((type, data) => {
     if (["snapshot", "agent-change", "agent-removed", "select", "asset-change"].includes(type)) {
       renderAgentList();
       renderAgentDetail();
     }
     if (["rooms", "select-room", "asset-change", "snapshot", "agent-change", "agent-removed"].includes(type)) {
       renderRoomList();
+    }
+    // The room panel holds dropdowns and file pickers, so it's only rebuilt
+    // when something it shows changed — not on every agent status update,
+    // which would close an open dropdown mid-selection.
+    const roomDetailChanged =
+      ["rooms", "select-room", "snapshot", "decor-library"].includes(type) ||
+      (type === "asset-change" && data.assetKind === "room") ||
+      (type === "room-decor" && data.roomIds.includes(store.selectedRoomId));
+    if (roomDetailChanged) {
+      if (type === "select-room") decorFlash = null;
       renderRoomDetail();
     }
     if (type === "connection") {
