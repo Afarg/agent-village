@@ -2,12 +2,19 @@
 // Placeholder characters/rooms use geometric primitives (docs/design/03 §4.1 P0);
 // either can be swapped for a user-uploaded PNG via the HUD (see hud.js).
 import { store } from "./store.js";
+import { C as DECOR_COLORS, PARTS, registerBuiltinParts } from "./decor/parts.js";
+import { resolveDecor } from "./decor/themes.js";
 
 const WALK_SPEED = 110; // logical px/sec
 const BUBBLE_MS = 3400;
 const EMOTE_MS = 900;
 const TEXT_RESOLUTION = 2; // render text at higher density so it stays crisp under pixelArt nearest-neighbor scaling
 const FONT_STACK = '"Yu Gothic UI", "Yu Gothic", Meiryo, monospace';
+
+// Static layers sit below everything; furniture and characters share the
+// y-sorted range (depth = bottom y in world px, always >= 0).
+const DEPTH = { floor: -100, tileOverride: -95, rug: -90, wallDecor: -80, header: -70 };
+const BUBBLE_DEPTH_BOOST = 100000; // a character with a visible bubble draws above all furniture
 
 function colorInt(hex, fallback = 0x94b0c2) {
   if (!hex) return fallback;
@@ -79,13 +86,18 @@ function isDummyAgent(agent) {
   return Array.isArray(agent.tools) && agent.tools.length === 0;
 }
 
+// Placeholder figure (no character art uploaded): a head + torso silhouette
+// in the agent's palette color, with a small dot on the head showing which
+// way it faces. Offsets are ratios of the character size.
+const HEAD_Y = -0.2;
 function eyeOffset(facing, charSize) {
-  const d = charSize * 0.3; // 6/20 = 0.3, the original hand-tuned ratio at CHAR_SIZE=20
+  const d = charSize * 0.08;
+  const y = charSize * HEAD_Y;
   switch (facing) {
-    case "up": return { x: 0, y: -d };
-    case "left": return { x: -d, y: 0 };
-    case "right": return { x: d, y: 0 };
-    default: return { x: 0, y: d };
+    case "up": return { x: 0, y: y - d };
+    case "left": return { x: -d, y };
+    case "right": return { x: d, y };
+    default: return { x: 0, y: y + d };
   }
 }
 
@@ -111,8 +123,14 @@ class VillageScene extends Phaser.Scene {
     // generated at (img_to_pixcel_app's `output_size` can be 64/128/etc. -
     // this is independent of that). `0.9` leaves a small margin so adjacent
     // characters in the break room don't touch edge-to-edge.
+    //
+    // 2026-09-30 (docs/design/09 §3.2): snapped down to a multiple of 16 so
+    // 128px character art maps to an exact 2:1 ratio (64px) in the 240x224
+    // office cells instead of an uneven ~67px.
     const { w: roomW, h: roomH } = roomsConfig.breakRoom.rect;
-    this.charSize = Math.floor((Math.min(roomW, roomH) / 3) * 0.9);
+    const rawSize = Math.floor((Math.min(roomW, roomH) / 3) * 0.9);
+    this.charSize = Math.max(16, Math.floor(rawSize / 16) * 16);
+    this.selectedId = null;
   }
 
   create() {
@@ -132,46 +150,83 @@ class VillageScene extends Phaser.Scene {
   }
 
   // ---------------------------------------------------------------- map ---
+  // Rooms are assembled from layered decor parts (docs/design/09-ai-office-redesign.md §4):
+  // floor/wall tile layers, rug, wall decor, then chairs/desks/side furniture
+  // that are y-sorted together with the characters (depth = bottom y), so a
+  // character standing behind a desk is partly hidden by it.
   drawMap() {
-    const { canvas, breakRoom, rooms, genericDesk } = this.roomsConfig;
-    this.cameras.main.setBackgroundColor(0x11142a);
+    const { breakRoom, rooms } = this.roomsConfig;
+    this.cameras.main.setBackgroundColor(DECOR_COLORS.walD);
+    registerBuiltinParts(this);
 
-    for (const room of rooms) this.drawRoom(room.id, room, 0xc9d3e6, 0x2b3350, "#1b2038");
-    this.drawRoom(breakRoom.id, breakRoom, 0xf6e6bd, 0xb8860b, "#5a4620");
-
-    if (genericDesk) {
-      this.add
-        .text(genericDesk.deskSpot.x, genericDesk.deskSpot.y - 14, genericDesk.label, {
-          fontFamily: FONT_STACK,
-          fontSize: "10px",
-          color: "#5a4620",
-          resolution: TEXT_RESOLUTION,
-        })
-        .setOrigin(0.5, 1);
-    }
-
-    this.add
-      .text(canvas.width / 2, canvas.height - 3, "Agent Village", {
-        fontFamily: FONT_STACK,
-        fontSize: "9px",
-        color: "#4a5170",
-        resolution: TEXT_RESOLUTION,
-      })
-      .setOrigin(0.5, 1);
+    for (const room of rooms) this.drawRoom(room);
+    this.drawRoom(breakRoom);
   }
 
-  drawRoom(roomId, room, fillColor, strokeColor, labelColor) {
-    const { x, y, w, h } = room.rect;
-    const bg = this.add.rectangle(x + w / 2, y + h / 2, w - 2, h - 2, fillColor);
-    const border = this.add.rectangle(x + w / 2, y + h / 2, w - 2, h - 2).setStrokeStyle(2, strokeColor);
-    const labelText = this.add
-      .text(x + 5, y + 4, room.label, { fontFamily: FONT_STACK, fontSize: "12px", color: labelColor, resolution: TEXT_RESOLUTION })
-      .setOrigin(0, 0);
+  // Resolves a part id to a loaded texture key, falling back to the first
+  // built-in part of the same category (e.g. an uploaded image that's missing).
+  partTexture(partId, category) {
+    if (!partId) return null;
+    if (this.textures.exists(partId)) return partId;
+    const fallback = PARTS.find((p) => p.category === category);
+    return fallback ? fallback.id : null;
+  }
 
-    this.roomVisuals.set(roomId, { bg, border, labelText, rect: room.rect, fillColor });
+  drawRoom(room) {
+    const { x, y, w, h } = room.rect;
+    const { headerH, wallBottom } = this.roomsConfig.metrics;
+    const decor = resolveDecor(room);
+    const objects = [];
+    const add = (obj) => {
+      objects.push(obj);
+      return obj;
+    };
+
+    const floorKey = this.partTexture(decor.floor, "floor");
+    add(this.add.tileSprite(x, y + wallBottom, w, h - wallBottom, floorKey).setOrigin(0, 0).setDepth(DEPTH.floor));
+    const wallKey = this.partTexture(decor.wall, "wall");
+    add(this.add.tileSprite(x, y + headerH, w, wallBottom - headerH, wallKey).setOrigin(0, 0).setDepth(DEPTH.floor));
+    // soft shadow the wall casts on the floor
+    add(this.add.rectangle(x, y + wallBottom, w, 3, 0x000000, 0.12).setOrigin(0, 0).setDepth(DEPTH.floor));
+
+    // name plate band
+    add(this.add.rectangle(x, y, w, headerH, DECOR_COLORS.wal).setOrigin(0, 0).setDepth(DEPTH.header));
+    add(this.add.rectangle(x, y + headerH - 1, w, 1, DECOR_COLORS.walD).setOrigin(0, 0).setDepth(DEPTH.header));
+    add(this.add.rectangle(x, y, w, 1, DECOR_COLORS.walL).setOrigin(0, 0).setDepth(DEPTH.header));
+    const labelText = add(
+      this.add
+        .text(x + 6, y + headerH / 2, room.label, { fontFamily: FONT_STACK, fontSize: "11px", color: "#f5e9d3", resolution: TEXT_RESOLUTION })
+        .setOrigin(0, 0.5)
+        .setDepth(DEPTH.header)
+    );
+
+    const rugKey = this.partTexture(decor.rug, "rug");
+    if (rugKey) add(this.add.image(room.rug.x, room.rug.y, rugKey).setDepth(DEPTH.rug));
+
+    for (const slot of room.wallSlots) {
+      const key = this.partTexture(decor.slots[slot.id], "wallDecor");
+      if (key) add(this.add.image(slot.x, slot.y, key).setOrigin(0.5, 1).setDepth(DEPTH.wallDecor));
+    }
+    for (const slot of room.sideSlots) {
+      const key = this.partTexture(decor.slots[slot.id], "sideDecor");
+      if (key) add(this.add.image(slot.x, slot.y, key).setOrigin(0.5, 1).setDepth(slot.y));
+    }
+    const deskKey = this.partTexture(decor.slots.desk, "desk");
+    const chairKey = this.partTexture(decor.slots.chair, "chair");
+    for (const desk of room.deskSlots) {
+      if (chairKey && desk.chair) add(this.add.image(desk.chair.x, desk.chair.y, chairKey).setOrigin(0.5, 1).setDepth(desk.chair.y));
+      if (deskKey) add(this.add.image(desk.x, desk.y, deskKey).setOrigin(0.5, 1).setDepth(desk.y));
+    }
+
+    // room outline
+    add(this.add.rectangle(x, y, w, h).setOrigin(0, 0).setStrokeStyle(1, DECOR_COLORS.out).setDepth(DEPTH.header));
+
+    this.roomVisuals.set(room.id, { labelText, rect: room.rect, objects, tileImage: null });
   }
 
   // -------------------------------------------------------- room tiles ---
+  // Legacy whole-room background image (docs/design/09 §6.4): covers the
+  // floor + wall layers; furniture is still drawn on top.
   applyRoomTile(roomId, tileUrl) {
     const visual = this.roomVisuals.get(roomId);
     if (!visual || !tileUrl) return;
@@ -180,24 +235,22 @@ class VillageScene extends Phaser.Scene {
     this.loadTexture(key, tileUrl, (ok) => {
       if (!ok || !this.roomVisuals.has(roomId)) return;
       const v = this.roomVisuals.get(roomId);
-      if (v.image) v.image.destroy();
+      if (v.tileImage) v.tileImage.destroy();
+      const { headerH } = this.roomsConfig.metrics;
       const { x, y, w, h } = v.rect;
-      const image = this.add.image(x + w / 2, y + h / 2, key).setDisplaySize(w - 2, h - 2);
-      image.setDepth(-1);
-      v.bg.setVisible(false);
-      v.image = image;
-      this.roomVisuals.set(roomId, v);
+      v.tileImage = this.add
+        .image(x, y + headerH, key)
+        .setOrigin(0, 0)
+        .setDisplaySize(w, h - headerH)
+        .setDepth(DEPTH.tileOverride);
     });
   }
 
   clearRoomTile(roomId) {
     const visual = this.roomVisuals.get(roomId);
-    if (!visual) return;
-    if (visual.image) {
-      visual.image.destroy();
-      visual.image = null;
-    }
-    visual.bg.setVisible(true);
+    if (!visual || !visual.tileImage) return;
+    visual.tileImage.destroy();
+    visual.tileImage = null;
   }
 
   // --------------------------------------------------- runtime texture loading ---
@@ -220,28 +273,33 @@ class VillageScene extends Phaser.Scene {
     if (!this.breakSpotIndex.has(agentId)) {
       this.breakSpotIndex.set(agentId, this.breakSpotIndex.size % spots.length);
     }
-    return spots[this.breakSpotIndex.get(agentId)];
+    return this.centerFromFeet(spots[this.breakSpotIndex.get(agentId)]);
+  }
+
+  // Layout spots are feet (bottom-center) positions; the character container
+  // is centered on the sprite.
+  centerFromFeet(p) {
+    return { x: p.x, y: p.y - this.charSize / 2 };
   }
 
   // Multiple agents can share one role/room (e.g. two "planner" agents), so
-  // desk positions are offset per-occupant to avoid stacking sprites exactly
-  // on top of each other. Slot assignment is stable for the character's lifetime.
+  // each occupant gets its own desk (room.workSpots: the 4 desks first, then
+  // standing spots between them). Slot assignment is stable for the
+  // character's lifetime.
   roomTargetFor(agent) {
-    const base = agent.deskSpot || this.roomsConfig.genericDesk.deskSpot;
     const roomId = agent.roomId || "generic";
+    const room = this.roomsConfig.rooms.find((r) => r.id === roomId);
+    const spots = room ? room.workSpots : [agent.deskSpot || this.roomsConfig.genericDesk.deskSpot];
 
     if (!this.deskSlotIndex.has(roomId)) this.deskSlotIndex.set(roomId, new Map());
     const slots = this.deskSlotIndex.get(roomId);
     if (!slots.has(agent.agentId)) slots.set(agent.agentId, slots.size);
     const idx = slots.get(agent.agentId);
 
-    const d = this.charSize * 1.1; // 22/20 = 1.1, the original hand-tuned ratio at CHAR_SIZE=20
-    const OFFSETS = [
-      [0, 0], [d, 0], [-d, 0], [0, d], [0, -d],
-      [d, d], [-d, -d], [d, -d], [-d, d],
-    ];
-    const [ox, oy] = OFFSETS[idx % OFFSETS.length];
-    return { x: base.x + ox, y: base.y + oy };
+    const base = spots[idx % spots.length];
+    // More occupants than spots: nudge repeats sideways so they don't stack exactly.
+    const lap = Math.floor(idx / spots.length);
+    return this.centerFromFeet({ x: base.x + lap * (this.charSize / 4), y: base.y });
   }
 
   spotForStatus(agent) {
@@ -260,16 +318,25 @@ class VillageScene extends Phaser.Scene {
     // (name tag, eye, selection ring, speech bubble) keeps its proportions
     // and stacking order as `size` changes with the break room's cell size.
     const body = this.add
-      .rectangle(0, 0, size * 0.7, size * 0.7, colorInt(agent.paletteMain))
-      .setStrokeStyle(1, 0x1a1c2c);
-    const eye = this.add.rectangle(0, size * 0.3, size * 0.2, size * 0.2, 0x1a1c2c);
+      .rectangle(0, size * 0.18, size * 0.42, size * 0.46, colorInt(agent.paletteMain))
+      .setStrokeStyle(1, 0x2b2320);
+    const head = this.add.ellipse(0, size * HEAD_Y, size * 0.34, size * 0.34, 0xf1c9a5).setStrokeStyle(1, 0x2b2320);
+    const eyePos = eyeOffset("down", size);
+    const eye = this.add.rectangle(eyePos.x, eyePos.y, size * 0.08, size * 0.08, 0x2b2320);
     const sprite = this.add.image(0, 0, "__DEFAULT").setDisplaySize(size, size).setVisible(false);
 
     const nameText = this.add
-      .text(0, -(size / 2 + 7), agent.displayName, { fontFamily: FONT_STACK, fontSize: "11px", color: "#ffffff", resolution: TEXT_RESOLUTION })
+      .text(0, -(size / 2 + 3), agent.displayName, {
+        fontFamily: FONT_STACK,
+        fontSize: "10px",
+        color: "#f5e9d3",
+        backgroundColor: "rgba(42,29,20,0.85)",
+        padding: { x: 3, y: 1 },
+        resolution: TEXT_RESOLUTION,
+      })
       .setOrigin(0.5, 1);
     const emote = this.add
-      .text(0, -(size / 2 + 15), "", { fontFamily: FONT_STACK, fontSize: "14px", color: "#ffffff", resolution: TEXT_RESOLUTION })
+      .text(0, -(size / 2 + 20), "", { fontFamily: FONT_STACK, fontSize: "14px", color: "#ffffff", resolution: TEXT_RESOLUTION })
       .setOrigin(0.5, 1)
       .setVisible(false);
 
@@ -281,14 +348,20 @@ class VillageScene extends Phaser.Scene {
 
     const selectRing = this.add.ellipse(0, size * 0.45, size * 1.4, size * 0.55, 0xffffff, 0.28).setVisible(false);
 
-    container.add([selectRing, body, eye, sprite, nameText, bubbleBg, bubbleText, emote]);
-    body.setInteractive({ useHandCursor: true }).on("pointerdown", () => store.select(agent.agentId));
-    sprite.setInteractive({ useHandCursor: true }).on("pointerdown", () => store.select(agent.agentId));
+    container.add([selectRing, body, head, eye, sprite, nameText, bubbleBg, bubbleText, emote]);
+    for (const target of [body, head, sprite]) {
+      target
+        .setInteractive({ useHandCursor: true })
+        .on("pointerdown", () => store.select(agent.agentId))
+        .on("pointerover", () => this.setHovered(agent.agentId, true))
+        .on("pointerout", () => this.setHovered(agent.agentId, false));
+    }
 
     const entry = {
       agent,
       container,
       body,
+      head,
       eye,
       sprite,
       nameText,
@@ -303,9 +376,11 @@ class VillageScene extends Phaser.Scene {
       isWalking: false,
       blinkTimer: null,
       walkFrameTimer: null,
+      hovered: false,
     };
 
     this.characters.set(agent.agentId, entry);
+    this.refreshNameVisibility(entry);
     this.setWorkingAnim(entry, agent.status === "working");
     if (agent.status !== "working") this.setIdleAnim(entry, true);
     // animation (docs/design/07-directional-animation-support.md §2) takes
@@ -314,6 +389,35 @@ class VillageScene extends Phaser.Scene {
     else if (agent.spriteUrl) this.applyCharacterSprite(entry, agent.spriteUrl);
     if (agent.pendingPermission) this.showPermissionBubble(entry, agent.pendingPermission);
     return entry;
+  }
+
+  // Name tags only for characters that matter right now (docs/design/09 §9):
+  // working/assigned, selected, or under the pointer. Idle characters crowd
+  // the break room, and always-on tags there overlapped into unreadable text.
+  refreshNameVisibility(entry) {
+    // Dummy showcase characters (isDummyAgent) are permanently "working", so
+    // their tags would sit on every wall forever — only on hover/selection.
+    const s = entry.agent.status;
+    const busy = (s === "working" || s === "assigned") && !isDummyAgent(entry.agent);
+    const show = busy || entry.hovered || this.selectedId === entry.agent.agentId;
+    entry.nameText.setVisible(show);
+  }
+
+  setHovered(agentId, on) {
+    const entry = this.characters.get(agentId);
+    if (!entry) return;
+    entry.hovered = on;
+    this.refreshNameVisibility(entry);
+  }
+
+  // y-sort every frame: characters walk between desks, so their depth relative
+  // to furniture changes continuously.
+  update() {
+    const half = this.charSize / 2;
+    for (const entry of this.characters.values()) {
+      const talking = entry.bubbleBg.visible || entry.hovered || this.selectedId === entry.agent.agentId;
+      entry.container.setDepth(entry.container.y + half + (talking ? BUBBLE_DEPTH_BOOST : 0));
+    }
   }
 
   // -------------------------------------------------- custom character art ---
@@ -334,6 +438,7 @@ class VillageScene extends Phaser.Scene {
       // report: uploaded characters were rendering far too large).
       entry.sprite.setTexture(key).setDisplaySize(this.charSize, this.charSize).setVisible(true);
       entry.body.setVisible(false);
+      entry.head.setVisible(false);
       entry.eye.setVisible(false);
       entry.currentSpriteUrl = url;
     });
@@ -342,6 +447,7 @@ class VillageScene extends Phaser.Scene {
   clearCharacterSprite(entry) {
     entry.sprite.setVisible(false);
     entry.body.setVisible(true);
+    entry.head.setVisible(true);
     entry.eye.setVisible(true);
     entry.currentSpriteUrl = null;
   }
@@ -361,6 +467,7 @@ class VillageScene extends Phaser.Scene {
       // is called).
       entry.sprite.setTexture(key).setDisplaySize(this.charSize, this.charSize).setFlipX(flipX).setVisible(true);
       entry.body.setVisible(false);
+      entry.head.setVisible(false);
       entry.eye.setVisible(false);
     });
   }
@@ -649,6 +756,7 @@ class VillageScene extends Phaser.Scene {
     entry.nameText.setText(nextAgent.displayName);
     entry.container.setAlpha(isDummyAgent(nextAgent) ? DUMMY_ALPHA : 1);
     entry.agent = nextAgent;
+    this.refreshNameVisibility(entry);
   }
 
   removeCharacter(agentId) {
@@ -700,8 +808,10 @@ class VillageScene extends Phaser.Scene {
     } else if (type === "agent-removed") {
       this.removeCharacter(data.agentId);
     } else if (type === "select") {
+      this.selectedId = data.agentId;
       for (const [id, entry] of this.characters) {
         entry.selectRing.setVisible(id === data.agentId);
+        this.refreshNameVisibility(entry);
       }
     } else if (type === "asset-change") {
       if (data.assetKind === "character") this.refreshCharacterAsset(data.id);
@@ -714,7 +824,10 @@ function computeZoom(canvas, containerEl) {
   const maxW = containerEl.clientWidth || canvas.width;
   const maxH = containerEl.clientHeight || canvas.height;
   const fit = Math.min(maxW / canvas.width, maxH / canvas.height);
-  return Math.max(1, Math.min(4, Math.floor(fit)));
+  // Integer zoom when the office fits; on smaller windows shrink fractionally
+  // instead of overflowing (the 240x224 office cells need ~750x700px at 1x).
+  if (fit >= 1) return Math.min(4, Math.floor(fit));
+  return Math.max(0.5, fit);
 }
 
 export async function initGame(containerId) {
@@ -723,6 +836,7 @@ export async function initGame(containerId) {
   const containerEl = document.getElementById(containerId);
   const zoom = computeZoom(roomsConfig.canvas, containerEl);
 
+  const scene = new VillageScene(roomsConfig);
   const game = new Phaser.Game({
     type: Phaser.AUTO,
     parent: containerId,
@@ -731,9 +845,11 @@ export async function initGame(containerId) {
     zoom,
     pixelArt: true,
     roundPixels: true,
-    backgroundColor: "#11142a",
-    scene: new VillageScene(roomsConfig),
+    backgroundColor: "#3f2a1d",
+    scene,
   });
+  // `?debug` exposes the scene for automated layout checks (positions/depths).
+  if (new URLSearchParams(window.location.search).has("debug")) window.__villageScene = scene;
 
   window.addEventListener("resize", () => {
     const newZoom = computeZoom(roomsConfig.canvas, containerEl);

@@ -89,6 +89,7 @@ function roomsWithAssets() {
   const withTile = (room) => ({ ...room, tileUrl: (roomTile(room.id) || {}).url || null });
   return {
     canvas: computed.canvas,
+    metrics: computed.metrics,
     breakRoom: withTile(computed.breakRoom),
     rooms: computed.rooms.map(withTile),
     genericDesk: computed.genericDesk,

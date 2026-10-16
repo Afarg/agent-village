@@ -1,9 +1,6 @@
 {
   "layout": {
-    "columns": 3,
-    "cellWidth": 140,
-    "cellHeight": 120,
-    "gap": 14
+    "columns": 3
   },
   "breakRoom": {
     "id": "break",

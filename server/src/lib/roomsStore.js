@@ -2,7 +2,7 @@ const fs = require("fs");
 const { computeLayout } = require("./layout");
 const { slugify } = require("./agentDefs");
 
-const LAYOUT_CFG = { columns: 3, cellWidth: 140, cellHeight: 120, gap: 14 };
+const LAYOUT_CFG = { columns: 3 }; // cell size is fixed by layout.js (docs/design/09 §3.2)
 
 // Set by init() at server startup — see docs/design/04-multi-project-integration.md §4.
 // Unlike agentDefs/agentState/customAssets (which take the path as a call argument),
