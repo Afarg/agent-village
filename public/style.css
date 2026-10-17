@@ -409,6 +409,59 @@ body {
   flex: 1;
 }
 
+.pm-help-lead {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.pm-add code,
+.pm-help code {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--inset);
+  color: var(--wood-100);
+}
+
+.pm-help {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.pm-help summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.pm-help ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.pm-help li + li {
+  margin-top: 3px;
+}
+
+.pm-tree {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--inset);
+  color: var(--text);
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.pm-tree b {
+  color: var(--accent);
+}
+
 .pm-info {
   font-size: 12px;
   color: var(--text-muted);

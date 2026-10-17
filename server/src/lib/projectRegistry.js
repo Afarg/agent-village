@@ -101,10 +101,34 @@ function validateNewPath(p) {
     return `フォルダが見つかりません: ${root}`;
   }
   if (!stat.isDirectory()) return `フォルダではありません: ${root}`;
+  // The usual mistakes: the .claude folder itself, or .claude\agents, instead
+  // of the project folder that contains them.
+  const parts = root.split(/[\\/]+/);
+  const claudeIdx = parts.map((s) => s.toLowerCase()).lastIndexOf(".claude");
+  if (claudeIdx > 0) {
+    const projectRoot = parts.slice(0, claudeIdx).join(path.sep);
+    return `.claude フォルダの中が指定されています。その外側のプロジェクトのフォルダ（${projectRoot}）を登録してください`;
+  }
   // A Claude Code project always has a .claude folder. Requiring it keeps a
   // typo'd path (e.g. a parent folder) from getting agents/ folders created in it
   // on switch.
-  if (!fs.existsSync(path.join(root, ".claude"))) return `.claude フォルダがありません（Claude Code のプロジェクトではないようです）: ${root}`;
+  if (!fs.existsSync(path.join(root, ".claude"))) {
+    // A parent folder like D:\app: point at the projects inside it.
+    let inside = [];
+    try {
+      inside = fs
+        .readdirSync(root, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && fs.existsSync(path.join(root, d.name, ".claude")))
+        .map((d) => d.name);
+    } catch {
+      inside = [];
+    }
+    if (inside.length) {
+      const names = inside.slice(0, 3).join("、") + (inside.length > 3 ? ` ほか${inside.length - 3}件` : "");
+      return `このフォルダには .claude フォルダがありません。中にあるプロジェクト（${names}）のどれかを登録してください`;
+    }
+    return `.claude フォルダがありません（Claude Code のプロジェクトではないようです）: ${root}`;
+  }
   return null;
 }
 

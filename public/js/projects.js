@@ -69,11 +69,16 @@ function badges(p, isCurrent) {
   return out.join("");
 }
 
+const nothingRegistered = () => state.projects.length === 0;
+
 function renderMenu() {
   const cur = state.current;
   // A background refresh can re-render while the user is typing a path.
   const typedPath = document.getElementById("pm-add-path")?.value || "";
   const typedLabel = document.getElementById("pm-add-label")?.value || "";
+  // Help starts open while nothing is registered yet; after that it keeps
+  // whatever the user last chose.
+  const helpOpen = menuEl().querySelector(".pm-help")?.open ?? nothingRegistered();
   const items = state.projects.map((p) => {
     const isCurrent = cur && samePath(p.path, cur.path);
     return `<li class="pm-item${isCurrent ? " current" : ""}${p.exists ? "" : " missing"}">
@@ -102,6 +107,22 @@ function renderMenu() {
     ${items.length ? `<ul class="pm-list">${items.join("")}</ul>` : `<p class="pm-empty">登録済みのプロジェクトはまだありません。</p>`}
     <div class="pm-add">
       <div class="pm-subtitle">プロジェクトを登録</div>
+      <div class="pm-help-lead"><code>.claude</code> フォルダが入っているフォルダ（ふだん Claude Code を起動しているフォルダ）を登録します。</div>
+      <details class="pm-help"${helpOpen ? " open" : ""}>
+        <summary>どのフォルダを登録すればいい？</summary>
+        <pre class="pm-tree">D:\\app\\my_project      <b>← ここを登録</b>
+├─ .claude
+│   ├─ agents         エージェントの定義（*.md）
+│   └─ settings.json  フックの設定
+└─ （ソースコードなど）</pre>
+        <ul>
+          <li><code>.claude</code> フォルダそのものや、<code>.claude\\agents</code> は登録しません。その<b>1つ上</b>のフォルダです。</li>
+          <li><code>D:\\app</code> のように、プロジェクトをいくつも含む親フォルダも登録しません。</li>
+          <li>パスは、エクスプローラーでフォルダを開き、上のアドレスバーをクリックするとコピーできます。</li>
+          <li>切り替えると、そのフォルダに <code>agents\\</code>（状態・部屋の設定）と <code>assets\\custom\\</code>（差し替え画像）が作られます。</li>
+          <li>作業中・権限待ちを表示するには、そのプロジェクトの <code>.claude\\settings.json</code> などにフック（agent-village-hook）の設定が必要です。設定方法は <code>docs/setup.md</code> §10 を参照してください。</li>
+        </ul>
+      </details>
       <input type="text" id="pm-add-path" placeholder="フォルダの絶対パス（例: D:\\app\\my_project）" spellcheck="false" />
       <div class="row">
         <input type="text" id="pm-add-label" placeholder="表示名（省略時はフォルダ名）" maxlength="40" />
@@ -109,7 +130,7 @@ function renderMenu() {
       </div>
     </div>
     <div id="pm-msg"></div>
-    <div class="appearance-notes">切り替えると、開いているすべてのタブが新しいプロジェクトの表示に再読み込みされます。状態を表示するには、そのプロジェクトにもフック（agent-village-hook）の設定が必要です。</div>`;
+    <div class="appearance-notes">切り替えると、開いているすべてのタブが新しいプロジェクトの表示に再読み込みされます。</div>`;
 
   document.getElementById("pm-add-path").value = typedPath;
   document.getElementById("pm-add-label").value = typedLabel;
