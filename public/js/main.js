@@ -2,9 +2,13 @@ import { store } from "./store.js";
 import { initGame } from "./game.js";
 import { initHud } from "./hud.js";
 import { initReports } from "./reports.js";
+import { initAlerts } from "./alerts.js";
+import { initProjects } from "./projects.js";
 
 async function bootstrap() {
   initHud();
+  initAlerts();
+  initProjects();
   await store.init();
   initReports();
   await initGame("game-container");

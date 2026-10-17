@@ -125,7 +125,9 @@ Agent Village server listening on http://localhost:4173
 - カレントディレクトリではなく明示的に別のパスを見せたい場合は `agent-village --target "D:\other\project"`。
 - `agents/config/rooms.json` がターゲット側にまだ無ければ、`server/src/config/rooms.default.json` から自動的にコピーされる（`(created from template)` と表示される）。以後はターゲットプロジェクト側のファイルが正であり、ダッシュボードの「部屋」タブからの編集もそちらに書き込まれる。プロジェクトごとに部屋構成を独立させたい場合の設計は `docs/design/04-multi-project-integration.md` §4 を参照。
 - `assets/custom/*`（差し替え画像）・`agents/state/*.json` もすべてターゲットプロジェクト側に作成される。`agents_app` 自身は汚さない。
-- 複数プロジェクトを同時に見たい場合は、`PORT` を変えてプロセスを複数起動する（1プロセス＝1ターゲットプロジェクト）。
+- 起動したまま見るプロジェクトを切り替えるには、画面右上の📁ボタン（接続中のプロジェクト名とパス）から切り替える。切り替え先は事前にそのメニューで登録しておく（登録リストは `agents_app/.agent-village/projects.json`、git管理外）。切り替えると、開いているすべてのタブが再読み込みされる。詳細は `docs/design/11-project-switcher.md`。
+- 複数プロジェクトを**同時に**見たい場合は、`PORT` を変えてプロセスを複数起動する（1プロセス＝その時点で1ターゲットプロジェクト）。
+- サーバーは `127.0.0.1`（このPC）からの接続だけを受け付ける。同じネットワークの別の端末から見る必要がある場合だけ、`HOST=0.0.0.0` を指定して起動する（切り替えAPIもネットワークに公開されるため、信頼できるネットワークでのみ）。
 - サーバーは `.claude/agents/*.md` と `agents/state/*.json` を起動時に全走査し、以降はファイル監視で差分を反映する。起動中に `.claude/agents/` へエージェント定義を追加・編集・削除すれば、ページを再読み込みしなくても画面に反映される。
 - `agents/state/*`（実行時データ）はターゲットプロジェクトの `.gitignore` に追加することを推奨。`agents/config/rooms.json`（部屋構成）はチームで共有したい設定であればコミット推奨。
 

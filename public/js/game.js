@@ -1,7 +1,7 @@
 // Phaser 3 scene: renders the pixel-art "village" map and the agent characters.
 // Placeholder characters/rooms use geometric primitives (docs/design/03 §4.1 P0);
 // either can be swapped for a user-uploaded PNG via the HUD (see hud.js).
-import { store } from "./store.js";
+import { store, isDummyAgent } from "./store.js";
 import { C as DECOR_COLORS, PARTS, registerBuiltinParts } from "./decor/parts.js";
 import { resolveDecor } from "./decor/themes.js";
 
@@ -70,21 +70,29 @@ function pickWalkView(animation, facing) {
   }
 }
 
-// A character whose def carries `tools: []` (empty, explicitly declared) is
-// one of the decorative placeholder characters (test-character-*,
-// business-character-*) that exist purely for pipeline/UI showcase and are
-// never real delegation targets (see each one's .claude/agents/*.md
-// description). Every currently-real agent def declares at least one tool.
-// Dimming these to a translucent look keeps them visually distinguishable
-// from actually-working agents at a glance (2026-08-21 user request) without
-// having to introduce a separate "dummy" frontmatter field that could drift
-// out of sync with the tools:[] convention already required to keep them out
-// of agent-dispatcher's delegation pool.
+// Showcase characters (isDummyAgent, see store.js) are dimmed to a
+// translucent look so they're visually distinguishable from actually-working
+// agents at a glance (2026-08-21 user request) without having to introduce a
+// separate "dummy" frontmatter field that could drift out of sync with the
+// tools:[] convention already required to keep them out of
+// agent-dispatcher's delegation pool.
 const DUMMY_ALPHA = 0.45;
 
-function isDummyAgent(agent) {
-  return Array.isArray(agent.tools) && agent.tools.length === 0;
-}
+// Speech bubble colors, matched to the warm palette (docs/design/09 §8).
+const BUBBLE_FILL = 0xfbf3e2;
+const BUBBLE_BORDER = 0x4e3726;
+const BUBBLE_TEXT = "#2a1d14";
+// Overlapping name tags / bubbles are pushed upward until they clear each
+// other (docs/design/09 §9). Gap between stacked boxes, in logical px.
+const STACK_GAP = 2;
+const BUBBLE_WRAP = 168; // px; wraps at about 15 full-width characters
+const BUBBLE_MAX_CHARS = 48; // the full text is in the side panel / report view
+const EDGE_PAD = 6; // keeps labels on-canvas even while the character bobs/drifts a few px
+const STACK_INTERVAL_MS = 100; // label placement pass rate (positions follow the character in between)
+// Idle/working characters bob up by this much. Placement is computed from the
+// un-bobbed position with this much extra gap, so two neighbors bobbing out
+// of phase can't drift into each other between passes.
+const BOB_PX = 3;
 
 // Placeholder figure (no character art uploaded): a head + torso silhouette
 // in the agent's palette color, with a small dot on the head showing which
@@ -132,6 +140,8 @@ class VillageScene extends Phaser.Scene {
     const rawSize = Math.floor((Math.min(roomW, roomH) / 3) * 0.9);
     this.charSize = Math.max(16, Math.floor(rawSize / 16) * 16);
     this.selectedId = null;
+    this.bubbleSeq = 0;
+    this.lastStackAt = -Infinity;
   }
 
   create() {
@@ -378,8 +388,9 @@ class VillageScene extends Phaser.Scene {
     const eye = this.add.rectangle(eyePos.x, eyePos.y, size * 0.08, size * 0.08, 0x2b2320);
     const sprite = this.add.image(0, 0, "__DEFAULT").setDisplaySize(size, size).setVisible(false);
 
+    const nameBaseY = -(size / 2 + 3);
     const nameText = this.add
-      .text(0, -(size / 2 + 3), agent.displayName, {
+      .text(0, nameBaseY, agent.displayName, {
         fontFamily: FONT_STACK,
         fontSize: "10px",
         color: "#f5e9d3",
@@ -393,15 +404,24 @@ class VillageScene extends Phaser.Scene {
       .setOrigin(0.5, 1)
       .setVisible(false);
 
+    const bubbleTail = this.add.graphics().setVisible(false);
     const bubbleBg = this.add.graphics().setVisible(false);
+    // useAdvancedWrap: plain wordWrap only breaks at spaces, so Japanese text
+    // (no spaces) never wrapped and bubbles grew into one very wide line.
     const bubbleText = this.add
-      .text(0, 0, "", { fontFamily: FONT_STACK, fontSize: "11px", color: "#1b2038", resolution: TEXT_RESOLUTION, wordWrap: { width: 150 } })
+      .text(0, 0, "", {
+        fontFamily: FONT_STACK,
+        fontSize: "11px",
+        color: BUBBLE_TEXT,
+        resolution: TEXT_RESOLUTION,
+        wordWrap: { width: BUBBLE_WRAP, useAdvancedWrap: true },
+      })
       .setOrigin(0.5, 1)
       .setVisible(false);
 
     const selectRing = this.add.ellipse(0, size * 0.45, size * 1.4, size * 0.55, 0xffffff, 0.28).setVisible(false);
 
-    container.add([selectRing, body, head, eye, sprite, nameText, bubbleBg, bubbleText, emote]);
+    container.add([selectRing, body, head, eye, sprite, nameText, bubbleTail, bubbleBg, bubbleText, emote]);
     for (const target of [body, head, sprite]) {
       target
         .setInteractive({ useHandCursor: true })
@@ -418,9 +438,15 @@ class VillageScene extends Phaser.Scene {
       eye,
       sprite,
       nameText,
+      nameBaseY,
+      nameShift: { x: 0, y: 0 },
       emote,
+      bubbleTail,
       bubbleBg,
       bubbleText,
+      bubbleBox: null, // { w, h, anchorY } of the bubble currently shown
+      bubbleSeq: 0, // ordering for "newest bubble in front"
+      bubbleShift: { x: 0, y: 0 },
       selectRing,
       roomId: agent.status === "idle" || agent.status === "error" ? "break" : agent.roomId,
       bubbleTimer: null,
@@ -453,6 +479,7 @@ class VillageScene extends Phaser.Scene {
     const s = entry.agent.status;
     const busy = (s === "working" || s === "assigned") && !isDummyAgent(entry.agent);
     const show = busy || entry.hovered || this.selectedId === entry.agent.agentId;
+    if (entry.nameText.visible !== show) this.lastStackAt = -Infinity;
     entry.nameText.setVisible(show);
   }
 
@@ -465,12 +492,138 @@ class VillageScene extends Phaser.Scene {
 
   // y-sort every frame: characters walk between desks, so their depth relative
   // to furniture changes continuously.
-  update() {
+  update(time) {
     const half = this.charSize / 2;
+    // Newer bubbles draw in front of older ones (docs/design/09 §9).
+    const bubbleRank = new Map(
+      [...this.characters.values()]
+        .filter((e) => e.bubbleBg.visible)
+        .sort((a, b) => a.bubbleSeq - b.bubbleSeq)
+        .map((e, i) => [e, i + 1])
+    );
     for (const entry of this.characters.values()) {
       const talking = entry.bubbleBg.visible || entry.hovered || this.selectedId === entry.agent.agentId;
-      entry.container.setDepth(entry.container.y + half + (talking ? BUBBLE_DEPTH_BOOST : 0));
+      const rank = bubbleRank.get(entry) || 0;
+      entry.container.setDepth(entry.container.y + half + (talking ? BUBBLE_DEPTH_BOOST : 0) + rank * 2000);
     }
+    if (time - this.lastStackAt >= STACK_INTERVAL_MS) {
+      this.lastStackAt = time;
+      this.stackLabels();
+    }
+  }
+
+  // Keeps name tags and speech bubbles from covering each other: name tags
+  // are placed first, then bubbles newest-first (so the newest one stays
+  // closest to its speaker). A box that would overlap moves to the nearest
+  // free spot next to the boxes in its way — up first, then sideways, below
+  // only as a last resort — always inside the canvas. Offsets are local to
+  // the character's container, so between passes they simply follow it.
+  // A box displaced on the previous pass keeps a few px of extra margin, so
+  // the gentle idle bob doesn't make it snap back and forth.
+  stackLabels() {
+    const items = [];
+    for (const entry of this.characters.values()) {
+      // Bobbing characters are placed from their rest position, so the
+      // result doesn't change from pass to pass while they bob.
+      const cx = entry.container.x;
+      const cy = entry.bobBaseY ?? entry.container.y;
+      if (entry.nameText.visible) {
+        const w = entry.nameText.displayWidth;
+        const h = entry.nameText.displayHeight;
+        items.push({ entry, kind: "name", order: 0, x: cx - w / 2, y: cy + entry.nameBaseY - h, w, h, prev: entry.nameShift });
+      }
+      if (entry.bubbleBg.visible && entry.bubbleBox) {
+        const { w, h, anchorY } = entry.bubbleBox;
+        items.push({ entry, kind: "bubble", order: 1, seq: entry.bubbleSeq, x: cx - w / 2, y: cy + anchorY - h, w, h, prev: entry.bubbleShift });
+      }
+    }
+    items.sort((a, b) => a.order - b.order || (b.seq || 0) - (a.seq || 0));
+
+    const { width: maxX, height: maxY } = this.roomsConfig.canvas;
+    const placed = [];
+    for (const it of items) {
+      const displaced = !!(it.prev.x || it.prev.y);
+      const others = placed.filter((p) => p.entry !== it.entry);
+      const fitsWith = (margin) => (x, y) =>
+        x >= 0 &&
+        y >= EDGE_PAD &&
+        x + it.w <= maxX &&
+        y + it.h <= maxY &&
+        !others.some((p) => x < p.x + p.w + margin && p.x < x + it.w + margin && y < p.y + p.h + margin && p.y < y + it.h + margin);
+      const gap = STACK_GAP + BOB_PX;
+      const fits = fitsWith(gap);
+
+      // Sticky: go home only when home is clearly free (extra margin for a
+      // box that was displaced), otherwise keep last pass's spot while it
+      // still works, and only search for a new one when it doesn't.
+      const home = displaced ? fitsWith(gap + 4)(it.x, it.y) : fits(it.x, it.y);
+      const kept = { x: it.x + it.prev.x, y: it.y + it.prev.y };
+      let best = { x: it.x, y: it.y };
+      if (!home && displaced && fits(kept.x, kept.y)) {
+        best = kept;
+      } else if (!home) {
+        const margin = gap;
+        const clampX = (x) => Math.min(Math.max(x, 0), maxX - it.w);
+        const xs = new Set([clampX(it.x)]);
+        const ys = new Set([Math.min(Math.max(it.y, EDGE_PAD), maxY - it.h)]);
+        for (const p of others) {
+          xs.add(p.x - it.w - margin).add(p.x + p.w + margin);
+          ys.add(p.y - it.h - margin).add(p.y + p.h + margin);
+        }
+        // moving down covers the speaker, so it costs more than up/sideways
+        const cost = (x, y) => Math.abs(x - it.x) * 1.5 + (y <= it.y ? it.y - y : (y - it.y) * 4);
+        let bestCost = Infinity;
+        for (const x of xs) for (const y of ys) {
+          const c = cost(x, y);
+          if (c < bestCost && fits(x, y)) {
+            bestCost = c;
+            best = { x, y };
+          }
+        }
+        if (bestCost === Infinity) best = { x: clampX(it.x), y: Math.min(Math.max(it.y, EDGE_PAD), maxY - it.h) };
+      }
+      placed.push({ ...it, ...best });
+
+      const shift = { x: Math.round(best.x - it.x), y: Math.round(best.y - it.y) };
+      if (it.kind === "name") {
+        it.entry.nameShift = shift;
+        it.entry.nameText.setPosition(shift.x, it.entry.nameBaseY + shift.y);
+      } else if (shift.x !== it.prev.x || shift.y !== it.prev.y) {
+        it.entry.bubbleShift = shift;
+        it.entry.bubbleBg.setPosition(shift.x, shift.y);
+        it.entry.bubbleText.setPosition(shift.x, it.entry.bubbleBox.anchorY + shift.y);
+        this.drawBubbleTail(it.entry);
+      }
+    }
+    // Hidden name tags drop their offset so they reappear at the natural spot.
+    for (const entry of this.characters.values()) {
+      if (!entry.nameText.visible && (entry.nameShift.x || entry.nameShift.y)) {
+        entry.nameShift = { x: 0, y: 0 };
+        entry.nameText.setPosition(0, entry.nameBaseY);
+      }
+    }
+  }
+
+  // A bubble moved off its speaker gets a thin leader line back to the
+  // speaker's head, so it's still clear who is talking.
+  drawBubbleTail(entry) {
+    const tail = entry.bubbleTail;
+    tail.clear();
+    const { x: dx, y: dy } = entry.bubbleShift;
+    if (!entry.bubbleBg.visible || (!dx && !dy)) {
+      tail.setVisible(false);
+      return;
+    }
+    const { w, h, anchorY } = entry.bubbleBox;
+    const head = { x: 0, y: anchorY + 2 };
+    // nearest point on the bubble's edge to the head
+    const px = Math.min(Math.max(head.x, dx - w / 2), dx + w / 2);
+    const py = Math.min(Math.max(head.y, anchorY + dy - h), anchorY + dy);
+    tail.lineStyle(1, BUBBLE_BORDER, 0.85);
+    tail.lineBetween(px, py, head.x, head.y);
+    tail.fillStyle(BUBBLE_BORDER, 0.85);
+    tail.fillCircle(head.x, head.y, 1.5);
+    tail.setVisible(true);
   }
 
   // -------------------------------------------------- custom character art ---
@@ -592,11 +745,19 @@ class VillageScene extends Phaser.Scene {
 
   // ------------------------------------------------------------ motion ---
   setIdleAnim(entry, on) {
-    if (entry.idleTween) entry.idleTween.stop();
+    if (entry.idleTween) {
+      entry.idleTween.stop();
+      entry.idleTween = null;
+      // Back to the rest position: restarting the bob from a mid-bob y would
+      // otherwise creep the character upward a little every time.
+      if (entry.bobBaseY != null) entry.container.y = entry.bobBaseY;
+    }
+    entry.bobBaseY = null;
     if (!on) return;
+    entry.bobBaseY = entry.container.y;
     entry.idleTween = this.tweens.add({
       targets: entry.container,
-      y: entry.container.y - 3,
+      y: entry.container.y - BOB_PX,
       duration: 700,
       yoyo: true,
       repeat: -1,
@@ -659,12 +820,12 @@ class VillageScene extends Phaser.Scene {
   // `persistent: true` (docs/design/06-permission-wait-bubble.md §5.2) skips the
   // auto-hide timer — caller is responsible for calling hideBubble() once the
   // condition (pendingPermission) clears.
-  showBubble(entry, text, { persistent = false, borderColor = 0x1b2038 } = {}) {
+  showBubble(entry, text, { persistent = false, borderColor = BUBBLE_BORDER } = {}) {
     if (entry.bubbleTimer) {
       entry.bubbleTimer.remove();
       entry.bubbleTimer = null;
     }
-    const short = text.length > 70 ? `${text.slice(0, 67)}...` : text;
+    const short = text.length > BUBBLE_MAX_CHARS ? `${text.slice(0, BUBBLE_MAX_CHARS - 1)}…` : text;
     const anchorY = -(this.charSize / 2 + 18); // 28/20 = 1.4 -> (20/2+18)=28, the original ratio at CHAR_SIZE=20
 
     entry.bubbleText.setText(short).setPosition(0, anchorY).setVisible(true);
@@ -673,17 +834,22 @@ class VillageScene extends Phaser.Scene {
     const h = bounds.height + 10;
 
     entry.bubbleBg.clear();
-    entry.bubbleBg.fillStyle(0xffffff, 0.96);
+    entry.bubbleBg.fillStyle(BUBBLE_FILL, 0.97);
     entry.bubbleBg.lineStyle(persistent ? 2 : 1, borderColor, 1);
     entry.bubbleBg.fillRoundedRect(-w / 2, anchorY - h, w, h, 5);
     entry.bubbleBg.strokeRoundedRect(-w / 2, anchorY - h, w, h, 5);
-    entry.bubbleBg.setVisible(true);
+    entry.bubbleBg.setPosition(0, 0).setVisible(true);
     entry.bubbleText.setPosition(0, anchorY);
+    entry.bubbleBox = { w, h, anchorY };
+    entry.bubbleSeq = ++this.bubbleSeq;
+    entry.bubbleShift = { x: 0, y: 0 };
+    this.drawBubbleTail(entry);
+    this.lastStackAt = -Infinity; // place it on the very next frame
 
     if (!persistent) {
       entry.bubbleTimer = this.time.delayedCall(BUBBLE_MS, () => {
-        entry.bubbleBg.setVisible(false);
-        entry.bubbleText.setVisible(false);
+        entry.bubbleTimer = null;
+        this.hideBubble(entry);
       });
     }
   }
@@ -695,6 +861,8 @@ class VillageScene extends Phaser.Scene {
     }
     entry.bubbleBg.setVisible(false);
     entry.bubbleText.setVisible(false);
+    entry.bubbleShift = { x: 0, y: 0 };
+    this.drawBubbleTail(entry);
   }
 
   showPermissionBubble(entry, pendingPermission) {

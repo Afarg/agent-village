@@ -24,6 +24,7 @@ const { renameAgentFile } = require("./lib/renameAgent");
 const roomsStore = require("./lib/roomsStore");
 const decorStore = require("./lib/decorStore");
 const reportLog = require("./lib/reportLog");
+const projectRegistry = require("./lib/projectRegistry");
 
 // See docs/design/04-multi-project-integration.md for the install-root vs.
 // target-root split this implements.
@@ -43,22 +44,44 @@ function resolveTargetRoot() {
 }
 
 const INSTALL_ROOT = path.resolve(__dirname, "..", "..");
-const TARGET_ROOT = resolveTargetRoot();
-const AGENTS_DEF_DIR = path.join(TARGET_ROOT, ".claude", "agents");
-const AGENTS_STATE_DIR = path.join(TARGET_ROOT, "agents", "state");
-const AGENTS_LOGS_DIR = path.join(TARGET_ROOT, "agents", "logs");
-const CHARACTER_ASSET_DIR = path.join(TARGET_ROOT, "assets", "custom", "characters");
-const ROOM_ASSET_DIR = path.join(TARGET_ROOT, "assets", "custom", "rooms");
-const DECOR_ASSET_DIR = path.join(TARGET_ROOT, "assets", "custom", "decor");
 const DECOR_URL_PREFIX = "/assets/custom/decor";
-const ROOMS_FILE = path.join(TARGET_ROOT, "agents", "config", "rooms.json");
 const ROOMS_TEMPLATE_FILE = path.join(__dirname, "config", "rooms.default.json");
 const PUBLIC_DIR = path.join(INSTALL_ROOT, "public");
 const PORT = process.env.PORT || 4173;
+// Loopback only by default (docs/design/11-project-switcher.md §5): the API can
+// now repoint the server at another registered folder, so it must not be
+// reachable from the LAN. HOST=0.0.0.0 restores the old behavior explicitly.
+const HOST = process.env.HOST || "127.0.0.1";
+
+// AGENT_VILLAGE_REGISTRY_FILE exists for tests, so they never touch the real list.
+projectRegistry.init(process.env.AGENT_VILLAGE_REGISTRY_FILE || path.join(INSTALL_ROOT, ".agent-village", "projects.json"));
+
+// Everything below is derived from the target root and is reassigned together
+// by setTargetPaths() when the header's project switcher changes the target
+// (docs/design/11-project-switcher.md §4).
+let TARGET_ROOT;
+let AGENTS_DEF_DIR;
+let AGENTS_STATE_DIR;
+let AGENTS_LOGS_DIR;
+let CHARACTER_ASSET_DIR;
+let ROOM_ASSET_DIR;
+let DECOR_ASSET_DIR;
+let ROOMS_FILE;
+
+function setTargetPaths(root) {
+  TARGET_ROOT = root;
+  AGENTS_DEF_DIR = path.join(root, ".claude", "agents");
+  AGENTS_STATE_DIR = path.join(root, "agents", "state");
+  AGENTS_LOGS_DIR = path.join(root, "agents", "logs");
+  CHARACTER_ASSET_DIR = path.join(root, "assets", "custom", "characters");
+  ROOM_ASSET_DIR = path.join(root, "assets", "custom", "rooms");
+  DECOR_ASSET_DIR = path.join(root, "assets", "custom", "decor");
+  ROOMS_FILE = path.join(root, "agents", "config", "rooms.json");
+}
 
 // ---- in-memory store -------------------------------------------------
-let defs = readAllAgentDefs(AGENTS_DEF_DIR); // agentId -> def
-let states = readAllStates(AGENTS_STATE_DIR); // agentId -> raw state json
+let defs = {}; // agentId -> def
+let states = {}; // agentId -> raw state json
 
 function characterSprite(agentId) {
   return assetInfo(CHARACTER_ASSET_DIR, agentId, "/assets/custom/characters");
@@ -156,14 +179,20 @@ function broadcastDecorLibraryChanged() {
 const pendingTimers = new Map();
 const DEBOUNCE_MS = 150;
 
-function scheduleReload(kind, filePath) {
+// Bumped on every project switch. A watcher closed during a switch can still
+// deliver one last event; stamping each event with the generation it was
+// watched under lets us drop those instead of applying them to the new target.
+let watchGeneration = 0;
+
+function scheduleReload(kind, filePath, gen = watchGeneration) {
+  if (gen !== watchGeneration) return;
   const key = `${kind}:${filePath}`;
   if (pendingTimers.has(key)) clearTimeout(pendingTimers.get(key));
   pendingTimers.set(
     key,
     setTimeout(() => {
       pendingTimers.delete(key);
-      reloadOne(kind, filePath);
+      if (gen === watchGeneration) reloadOne(kind, filePath);
     }, DEBOUNCE_MS)
   );
 }
@@ -227,70 +256,142 @@ function reloadOne(kind, filePath) {
   }
 }
 
+// ---- target loading -------------------------------------------------
+let roomsFileWasCreated = false;
+// /assets/custom is served from the current target, so the static handler is
+// rebuilt whenever the target changes (see the app.use near the bottom).
+let customAssetStatic = null;
+
+// Reads everything for `root` into memory. Throws (leaving module state
+// half-updated) if e.g. rooms.json is unparseable — switchTarget() handles
+// that by loading the previous root again.
+function loadTarget(root) {
+  setTargetPaths(root);
+  fs.mkdirSync(AGENTS_DEF_DIR, { recursive: true });
+  fs.mkdirSync(AGENTS_STATE_DIR, { recursive: true });
+  fs.mkdirSync(AGENTS_LOGS_DIR, { recursive: true });
+  fs.mkdirSync(CHARACTER_ASSET_DIR, { recursive: true });
+  fs.mkdirSync(ROOM_ASSET_DIR, { recursive: true });
+  fs.mkdirSync(DECOR_ASSET_DIR, { recursive: true });
+
+  // The target project doesn't necessarily have a rooms.json of its own yet —
+  // bootstrap-copy the bundled default on first run (docs/design/04-multi-project-integration.md §4).
+  // Never overwrite an existing one: room edits made from the dashboard live here.
+  fs.mkdirSync(path.dirname(ROOMS_FILE), { recursive: true });
+  roomsFileWasCreated = !fs.existsSync(ROOMS_FILE);
+  if (roomsFileWasCreated) fs.copyFileSync(ROOMS_TEMPLATE_FILE, ROOMS_FILE);
+  roomsStore.init(ROOMS_FILE);
+
+  reportLog.loadAll(AGENTS_LOGS_DIR);
+  defs = readAllAgentDefs(AGENTS_DEF_DIR);
+  states = readAllStates(AGENTS_STATE_DIR);
+  customAssetStatic = express.static(path.join(root, "assets", "custom"));
+}
+
 // ---- watchers -------------------------------------------------
-fs.mkdirSync(AGENTS_DEF_DIR, { recursive: true });
-fs.mkdirSync(AGENTS_STATE_DIR, { recursive: true });
-fs.mkdirSync(AGENTS_LOGS_DIR, { recursive: true });
-fs.mkdirSync(CHARACTER_ASSET_DIR, { recursive: true });
-fs.mkdirSync(ROOM_ASSET_DIR, { recursive: true });
-fs.mkdirSync(DECOR_ASSET_DIR, { recursive: true });
-
-reportLog.loadAll(AGENTS_LOGS_DIR);
-
-// The target project doesn't necessarily have a rooms.json of its own yet —
-// bootstrap-copy the bundled default on first run (docs/design/04-multi-project-integration.md §4).
-// Never overwrite an existing one: room edits made from the dashboard live here.
-fs.mkdirSync(path.dirname(ROOMS_FILE), { recursive: true });
-const roomsFileWasCreated = !fs.existsSync(ROOMS_FILE);
-if (roomsFileWasCreated) fs.copyFileSync(ROOMS_TEMPLATE_FILE, ROOMS_FILE);
-roomsStore.init(ROOMS_FILE);
-
 const watchOpts = { ignoreInitial: true, awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 } };
+let watchers = [];
 
-chokidar
-  .watch(AGENTS_DEF_DIR, watchOpts)
-  .on("add", (p) => scheduleReload("definition", p))
-  .on("change", (p) => scheduleReload("definition", p))
-  .on("unlink", (p) => scheduleReload("definition", p));
+// Resolves once every watcher has finished its initial scan. Until then a
+// write can go unnoticed, so switchTarget() waits for this and re-reads.
+function startWatchers() {
+  const gen = watchGeneration;
+  const on = (kind, fixedPath) => (p) => scheduleReload(kind, fixedPath || p, gen);
 
-chokidar
-  .watch(AGENTS_STATE_DIR, watchOpts)
-  .on("add", (p) => scheduleReload("state", p))
-  .on("change", (p) => scheduleReload("state", p))
-  .on("unlink", (p) => scheduleReload("state", p));
+  watchers = [
+    chokidar
+      .watch(AGENTS_DEF_DIR, watchOpts)
+      .on("add", on("definition"))
+      .on("change", on("definition"))
+      .on("unlink", on("definition")),
 
-// Watching the asset folders too (not just the upload endpoints below) means
-// an artist can drop a PNG in by hand and the dashboard still picks it up.
-chokidar
-  .watch(CHARACTER_ASSET_DIR, watchOpts)
-  .on("add", (p) => scheduleReload("character-asset", p))
-  .on("change", (p) => scheduleReload("character-asset", p))
-  .on("unlink", (p) => scheduleReload("character-asset", p));
+    chokidar
+      .watch(AGENTS_STATE_DIR, watchOpts)
+      .on("add", on("state"))
+      .on("change", on("state"))
+      .on("unlink", on("state")),
 
-chokidar
-  .watch(ROOM_ASSET_DIR, watchOpts)
-  .on("add", (p) => scheduleReload("room-asset", p))
-  .on("change", (p) => scheduleReload("room-asset", p))
-  .on("unlink", (p) => scheduleReload("room-asset", p));
+    // Watching the asset folders too (not just the upload endpoints below) means
+    // an artist can drop a PNG in by hand and the dashboard still picks it up.
+    chokidar
+      .watch(CHARACTER_ASSET_DIR, watchOpts)
+      .on("add", on("character-asset"))
+      .on("change", on("character-asset"))
+      .on("unlink", on("character-asset")),
 
-// Decor parts can also be dropped into assets/custom/decor/<category>/ by hand.
-// All changes collapse into one debounced "library changed" (same key).
-chokidar
-  .watch(DECOR_ASSET_DIR, watchOpts)
-  .on("add", () => scheduleReload("decor-asset", DECOR_ASSET_DIR))
-  .on("change", () => scheduleReload("decor-asset", DECOR_ASSET_DIR))
-  .on("unlink", () => scheduleReload("decor-asset", DECOR_ASSET_DIR));
+    chokidar
+      .watch(ROOM_ASSET_DIR, watchOpts)
+      .on("add", on("room-asset"))
+      .on("change", on("room-asset"))
+      .on("unlink", on("room-asset")),
 
-// Picks up hand-edits to rooms.json too, not just changes made through the API.
-chokidar.watch(ROOMS_FILE, watchOpts).on("change", () => scheduleReload("rooms-file", ROOMS_FILE));
+    // Decor parts can also be dropped into assets/custom/decor/<category>/ by hand.
+    // All changes collapse into one debounced "library changed" (same key).
+    chokidar
+      .watch(DECOR_ASSET_DIR, watchOpts)
+      .on("add", on("decor-asset", DECOR_ASSET_DIR))
+      .on("change", on("decor-asset", DECOR_ASSET_DIR))
+      .on("unlink", on("decor-asset", DECOR_ASSET_DIR)),
 
-// agents/logs/*.ndjson — permanent report history (docs/design/08-report-history.md).
-// "add" fires for a brand-new agent's first-ever report line; "change" for
-// every subsequent append.
-chokidar
-  .watch(AGENTS_LOGS_DIR, watchOpts)
-  .on("add", (p) => scheduleReload("report-log", p))
-  .on("change", (p) => scheduleReload("report-log", p));
+    // Picks up hand-edits to rooms.json too, not just changes made through the API.
+    chokidar.watch(ROOMS_FILE, watchOpts).on("change", on("rooms-file", ROOMS_FILE)),
+
+    // agents/logs/*.ndjson — permanent report history (docs/design/08-report-history.md).
+    // "add" fires for a brand-new agent's first-ever report line; "change" for
+    // every subsequent append.
+    chokidar
+      .watch(AGENTS_LOGS_DIR, watchOpts)
+      .on("add", on("report-log"))
+      .on("change", on("report-log")),
+  ];
+  return Promise.all(watchers.map((w) => new Promise((resolve) => w.once("ready", resolve))));
+}
+
+// Picks up writes that landed between loadTarget()'s read and the watchers
+// becoming ready (seen in testing: a state write right after a switch was lost).
+function rereadAfterReady() {
+  defs = readAllAgentDefs(AGENTS_DEF_DIR);
+  states = readAllStates(AGENTS_STATE_DIR);
+}
+
+async function stopWatchers() {
+  watchGeneration++;
+  for (const timer of pendingTimers.values()) clearTimeout(timer);
+  pendingTimers.clear();
+  const closing = watchers;
+  watchers = [];
+  await Promise.all(closing.map((w) => w.close()));
+}
+
+// docs/design/11-project-switcher.md §4. Every connected tab reloads on
+// project-changed (same as rooms-changed): the whole picture — agents, rooms,
+// decor, report history — belongs to the old project.
+let switching = false;
+
+async function switchTarget(root) {
+  const previous = TARGET_ROOT;
+  await stopWatchers();
+  try {
+    loadTarget(root);
+  } catch (err) {
+    loadTarget(previous);
+    await startWatchers();
+    rereadAfterReady();
+    throw err;
+  }
+  await startWatchers();
+  rereadAfterReady();
+  console.log(`[project] switched target: ${previous} -> ${TARGET_ROOT} (${Object.keys(defs).length} agents)`);
+  sendEvent("project-changed", { path: TARGET_ROOT, serverTime: new Date().toISOString() });
+}
+
+function currentProject() {
+  const entry = projectRegistry.find(TARGET_ROOT);
+  return { ...projectRegistry.describe(TARGET_ROOT, entry && entry.label), registered: Boolean(entry) };
+}
+
+loadTarget(resolveTargetRoot());
+startWatchers();
 
 // ---- http app -------------------------------------------------
 const app = express();
@@ -643,7 +744,45 @@ app.delete("/api/rooms/:roomId/decor", (req, res) => {
   res.json({ ok: true });
 });
 
-app.use("/assets/custom", express.static(path.join(TARGET_ROOT, "assets", "custom")));
+// ---- project switcher (docs/design/11-project-switcher.md §3-§4) -------------------------------------------------
+app.get("/api/projects", (req, res) => {
+  res.json({ current: currentProject(), projects: projectRegistry.list() });
+});
+
+app.post("/api/projects", (req, res) => {
+  const result = projectRegistry.add(req.body?.path, req.body?.label);
+  if (result.error) return res.status(400).json({ error: result.error });
+  res.json({ ok: true, project: result.project, current: currentProject(), projects: projectRegistry.list() });
+});
+
+// Removing only forgets the entry — nothing in the project folder is touched.
+app.delete("/api/projects", (req, res) => {
+  if (!projectRegistry.remove(req.body?.path || "")) return res.status(404).json({ error: "登録されていないプロジェクトです" });
+  res.json({ ok: true, current: currentProject(), projects: projectRegistry.list() });
+});
+
+// Only registered folders can be switched to — the list is the allow-list.
+app.post("/api/projects/switch", async (req, res) => {
+  const entry = req.body?.path ? projectRegistry.find(req.body.path) : null;
+  if (!entry) return res.status(400).json({ error: "登録されていないプロジェクトには切り替えられません" });
+  const root = projectRegistry.normalize(entry.path);
+  if (projectRegistry.samePath(root, TARGET_ROOT)) return res.json({ ok: true, unchanged: true, current: currentProject() });
+  const info = projectRegistry.describe(root, entry.label);
+  if (!info.exists) return res.status(400).json({ error: `フォルダが見つかりません: ${root}` });
+  if (switching) return res.status(409).json({ error: "別の切り替えを処理中です。少し待ってからやり直してください" });
+
+  switching = true;
+  try {
+    await switchTarget(root);
+    res.json({ ok: true, current: currentProject() });
+  } catch (err) {
+    res.status(500).json({ error: `切り替えに失敗したため、元のプロジェクトに戻しました: ${err.message}` });
+  } finally {
+    switching = false;
+  }
+});
+
+app.use("/assets/custom", (req, res, next) => customAssetStatic(req, res, next));
 app.use(express.static(PUBLIC_DIR));
 
 // Only opened when launched through the `agent-village` CLI (bin/agent-village.js
@@ -656,8 +795,8 @@ function openBrowser(url) {
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`Agent Village server listening on http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`Agent Village server listening on http://localhost:${PORT}${HOST === "127.0.0.1" ? "" : ` (host ${HOST})`}`);
   console.log(`  target project:      ${TARGET_ROOT}`);
   console.log(`  watching definitions: ${AGENTS_DEF_DIR}`);
   console.log(`  watching state:       ${AGENTS_STATE_DIR}`);

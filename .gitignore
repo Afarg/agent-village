@@ -15,3 +15,6 @@ agents/logs/*.ndjson
 
 # セッションの経緯・文脈の記録（人が読み返す用。CLAUDE.md「コンテキストログの保存」）
 docs/context_logs/
+
+# プロジェクト切替の登録リスト（マシン固有の絶対パス。docs/design/11-project-switcher.md）
+.agent-village/

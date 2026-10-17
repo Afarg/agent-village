@@ -1,4 +1,14 @@
 // Tiny dependency-free pub/sub store shared between the Phaser scene and the DOM HUD.
+
+// A character whose def carries `tools: []` (empty, explicitly declared) is
+// one of the decorative placeholder characters (test-character-*,
+// business-character-*) that exist purely for pipeline/UI showcase and are
+// never real delegation targets (see each one's .claude/agents/*.md
+// description). Every currently-real agent def declares at least one tool.
+export function isDummyAgent(agent) {
+  return Array.isArray(agent.tools) && agent.tools.length === 0;
+}
+
 class Store {
   constructor() {
     this.agents = new Map(); // agentId -> AgentCharacter
@@ -131,6 +141,12 @@ class Store {
       // Room rename/add/delete reshuffles the whole grid layout — simplest
       // correct behavior for every connected tab is to just reload rather
       // than re-deriving a live in-place re-layout in Phaser.
+      window.location.reload();
+    });
+
+    // docs/design/11-project-switcher.md §4: the server now watches another
+    // folder, so nothing on screen is valid any more.
+    es.addEventListener("project-changed", () => {
       window.location.reload();
     });
 

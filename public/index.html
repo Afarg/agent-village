@@ -15,6 +15,19 @@
         <button class="tab-btn active" data-view="office" type="button">オフィス</button>
         <button class="tab-btn" data-view="reports" type="button">レポート</button>
       </div>
+      <div id="status-summary" aria-live="polite"></div>
+      <button class="btn" id="notify-toggle" type="button">🔕 通知オフ</button>
+      <div id="project-switcher">
+        <button class="project-btn" id="project-current" type="button" aria-haspopup="true" aria-expanded="false">
+          <span class="project-icon">📁</span>
+          <span class="project-text">
+            <span class="project-name" id="project-name">読み込み中…</span>
+            <span class="project-path" id="project-path"></span>
+          </span>
+          <span class="project-caret">▾</span>
+        </button>
+        <div id="project-menu" class="project-menu" hidden></div>
+      </div>
       <span id="conn-status" class="badge badge-offline">接続待ち…</span>
       <span id="server-time"></span>
     </header>

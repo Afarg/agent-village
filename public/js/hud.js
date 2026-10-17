@@ -402,13 +402,22 @@ function allRooms() {
   ];
 }
 
+// List thumbnail: the legacy whole-room image if set, else the room's floor part.
+function roomThumbUrl(room) {
+  if (room.tileUrl) return room.tileUrl;
+  const floor = resolveDecor(store.findRoom(room.id) || { id: room.id }).floor;
+  if (floor && floor.startsWith("custom:")) return store.customParts("floor").find((p) => p.id === floor)?.url || null;
+  return floor ? builtinPartDataUrl(floor) : null;
+}
+
 function renderRoomList() {
   const listEl = document.getElementById("room-list");
   const rooms = allRooms();
 
   listEl.innerHTML = rooms
     .map((r) => {
-      const thumbStyle = r.tileUrl ? `background-image:url('${r.tileUrl}')` : `background-color:#c9d3e6`;
+      const thumbUrl = roomThumbUrl(r);
+      const thumbStyle = thumbUrl ? `background-image:url('${thumbUrl}');background-size:auto` : `background-color:var(--plaster)`;
       const occupants = store
         .getAgents()
         .filter((a) => (r.isBreak ? a.status === "idle" || a.status === "error" : a.roomId === r.id && a.status !== "idle"));
@@ -509,7 +518,7 @@ function roomAppearanceEditorHtml(room) {
     ? `PNG形式・${c.minSize}〜${c.maxSize}px・${fmtKB(c.maxBytes)}以下。部屋のマス目と同じ比率（推奨 ${c.recommended.w}×${c.recommended.h}px）でないと引き伸ばされて表示されます。`
     : "";
 
-  const previewStyle = room.tileUrl ? `background-image:url('${room.tileUrl}')` : `background-color:#c9d3e6`;
+  const previewStyle = room.tileUrl ? `background-image:url('${room.tileUrl}')` : `background-color:var(--plaster)`;
 
   return `
     <div class="appearance-editor">
@@ -628,14 +637,17 @@ function roomDecorEditorHtml(room) {
         <div class="decor-row" data-slot="${slot.id}" data-category="${slot.category}">
           <div class="decor-thumb">${selected ? `<img src="${escapeHtml(selected.thumb)}" alt="" />` : `<span>なし</span>`}</div>
           <div class="decor-main">
-            <div class="decor-label">${label} <span class="decor-spec">${decorSpecNote(spec)}</span></div>
-            <select class="decor-select" data-slot="${slot.id}">
+            <div class="decor-head">
+              <span class="decor-label">${label}</span>
+              <span class="decor-spec">${decorSpecNote(spec)}</span>
+              <button class="btn decor-upload-btn" type="button" title="PNGをこの行にドラッグ＆ドロップしても登録できます">画像…</button>
+            </div>
+            <select class="decor-select" data-slot="${slot.id}" title="${escapeHtml(selected ? selected.label : "なし")}">
               ${slot.nullable ? `<option value="" ${value ? "" : "selected"}>なし${def ? "" : "（既定）"}</option>` : ""}
               <optgroup label="標準の部品">${builtin.map(opt).join("")}</optgroup>
               ${custom.length ? `<optgroup label="アップロードした部品">${custom.map(opt).join("")}</optgroup>` : ""}
             </select>
           </div>
-          <button class="btn decor-upload-btn" type="button" title="PNGをこの行にドラッグ＆ドロップしても登録できます">画像…</button>
         </div>
       `;
     })
@@ -866,7 +878,7 @@ export function initHud() {
       renderAgentList();
       renderAgentDetail();
     }
-    if (["rooms", "select-room", "asset-change", "snapshot", "agent-change", "agent-removed"].includes(type)) {
+    if (["rooms", "select-room", "asset-change", "snapshot", "agent-change", "agent-removed", "room-decor", "decor-library"].includes(type)) {
       renderRoomList();
     }
     // The room panel holds dropdowns and file pickers, so it's only rebuilt
