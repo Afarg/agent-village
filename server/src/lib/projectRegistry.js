@@ -7,6 +7,7 @@
 // API — the switch endpoint never accepts an arbitrary path.
 const fs = require("fs");
 const path = require("path");
+const { userClaudeDir } = require("./configOverview");
 
 const LABEL_MAX = 40;
 
@@ -46,13 +47,15 @@ function find(p) {
   return load().find((entry) => samePath(normalize(entry.path), target)) || null;
 }
 
-// Hooks are configured per project (docs/design/05, 06). Without them the
+// Hooks are usually configured per project (docs/design/05, 06), but one in the
+// user-wide ~/.claude/settings.json covers every project. Without them the
 // dashboard still shows the agent definitions, but never any live status —
 // worth flagging in the switcher so an empty office isn't a mystery.
 function hookConfigured(root) {
-  for (const name of ["settings.json", "settings.local.json"]) {
+  const files = [path.join(root, ".claude", "settings.json"), path.join(root, ".claude", "settings.local.json"), path.join(userClaudeDir(), "settings.json")];
+  for (const file of files) {
     try {
-      if (fs.readFileSync(path.join(root, ".claude", name), "utf8").includes("agent-village-hook")) return true;
+      if (fs.readFileSync(file, "utf8").includes("agent-village-hook")) return true;
     } catch {
       // file absent — try the next one
     }

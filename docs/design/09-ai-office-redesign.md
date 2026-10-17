@@ -237,7 +237,7 @@
 | 2-3 ✅ | 部品ライブラリ・API・部屋パネルのドロップダウン／ドロップ領域 | `server/src/lib/decorStore.js`（新規）、`png.js`、`roomsStore.js`、`index.js`、`store.js`、`game.js`、`hud.js`、`style.css` |
 | 2-4 ✅ | HTML UI全体を §8 の配色に統一、名前・吹き出しの重なり対策。状況サマリーバー（権限待ちを最優先で表示）、ブラウザ通知 | `style.css`、`index.html`、`game.js`、`hud.js`、`store.js`、`alerts.js`（新規） |
 | 2-4b ✅ | （ユーザー要望で追加）ヘッダーに接続中のプロジェクト名とパスを表示し、登録したプロジェクトに起動したまま切り替える。待ち受けを `127.0.0.1` に限定（2-5から前倒し）。設計と検証は別紙 `11-project-switcher.md` | `server/src/lib/projectRegistry.js`・`public/js/projects.js`（新規）、`index.js`、`index.html`、`store.js`、`alerts.js`、`style.css` |
-| 2-5 ✅ | 「構成」画面（読み取り専用）: プロジェクトのエージェント・スキル・コマンド・MCP・プラグイン・フック・権限・環境変数・CLAUDE.md を一覧表示。秘密情報はサーバー側で伏せる。読むのはプロジェクトのフォルダの中だけ。設計と検証は別紙 `10-config-overview.md`。待ち受けの `127.0.0.1` への限定は 2-4b で済み | `server/src/lib/configOverview.js`・`secretMask.js`・`public/js/config.js`（新規）、`index.js`、`index.html`、`hud.js`、`main.js`、`style.css` |
+| 2-5 ✅ | 「構成」画面（読み取り専用）: プロジェクトのエージェント・スキル・コマンド・MCP・プラグイン・フック・権限・環境変数・CLAUDE.md を一覧表示。秘密情報はサーバー側で伏せる。読むのはプロジェクトのフォルダと `~/.claude/` の中だけ（`~/.claude.json` は読まない。2026-10-18 追加）。設計と検証は別紙 `10-config-overview.md`。待ち受けの `127.0.0.1` への限定は 2-4b で済み | `server/src/lib/configOverview.js`・`secretMask.js`・`public/js/config.js`（新規）、`index.js`、`index.html`、`hud.js`、`main.js`、`style.css` |
 | 2-6 | 磨き込み（詳細パネル強化、レポートとの相互移動、タイムライン、表示フィルター、状態の演出など） | — |
 | 2-7 | 全体の検証（下記） | — |
 

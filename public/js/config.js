@@ -1,6 +1,8 @@
 // 「構成」画面（docs/design/10-config-overview.md）— 接続中のプロジェクトの
 // Claude Code 設定を読み取り専用で一覧する。秘密情報はサーバー側（GET /api/config）
 // で伏せ済みなので、ここでは受け取った文字列をエスケープして表示するだけ。
+// 項目はプロジェクト（.claude/）とユーザー全体（~/.claude/）の両方から来るので、
+// scope で見分けて印を付け、ツールバーで絞り込めるようにする。
 
 function escapeHtml(str) {
   return String(str ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -10,10 +12,28 @@ const PERMISSION_OPEN_LIMIT = 10;
 const MCP_STATUS = { enabled: ["有効", "ok"], disabled: ["無効", "off"], pending: ["未承認", "warn"] };
 const SOURCE_STATUS = { ok: "読み込み済み", missing: "なし", error: "読めない" };
 
+const SCOPE_FILTERS = ["all", "project", "user"];
+const SCOPE_KEY = "agentVillage.configScope";
+
 let loading = false;
+let lastConfig = null;
+let scopeFilter = "all";
+try {
+  const saved = localStorage.getItem(SCOPE_KEY);
+  if (SCOPE_FILTERS.includes(saved)) scopeFilter = saved;
+} catch {
+  // storage unavailable — keep the default
+}
 
 const none = () => `<p class="cfg-none">設定なし</p>`;
-const src = (s) => `<span class="cfg-src" title="出典">${escapeHtml(s.replace(".claude/", ""))}</span>`;
+const src = (s) =>
+  s.startsWith("~/")
+    ? `<span class="cfg-src user" title="${escapeHtml(s)}">ユーザー全体</span>`
+    : `<span class="cfg-src" title="出典">${escapeHtml(s.replace(".claude/", ""))}</span>`;
+const scopeChip = (it) =>
+  it.scope === "user"
+    ? `<span class="cfg-scope" title="${escapeHtml(it.file || it.dir || "~/.claude/")}">ユーザー全体</span>${it.sameNameInProject ? `<span class="cfg-meta warn">同じ名前がプロジェクトにもあります</span>` : ""}`
+    : "";
 const code = (s) => `<code>${escapeHtml(s)}</code>`;
 
 function card(id, title, count, body, note = "") {
@@ -31,7 +51,7 @@ function namedList(items, extra) {
   return `<ul class="cfg-list">${items
     .map(
       (it) => `<li class="cfg-item" tabindex="0">
-        <div class="cfg-item-head"><span class="cfg-name">${escapeHtml(it.name)}</span>${extra(it)}</div>
+        <div class="cfg-item-head"><span class="cfg-name">${escapeHtml(it.name)}</span>${scopeChip(it)}${extra(it)}</div>
         ${it.description ? `<div class="cfg-desc">${escapeHtml(it.description)}</div>` : ""}
       </li>`
     )
@@ -40,17 +60,17 @@ function namedList(items, extra) {
 
 function agentsCard(c) {
   const body = namedList(c.agents, (a) => `${a.model ? `<span class="chip">${escapeHtml(a.model)}</span>` : ""}${a.tools ? `<span class="cfg-meta">ツール ${a.tools.length}</span>` : `<span class="cfg-meta">ツール すべて</span>`}`);
-  return card("agents", "エージェント", c.agents.length, body, `${code(".claude/agents/")} の定義`);
+  return card("agents", "エージェント", c.agents.length, body, `${code(".claude/agents/")}・${code("~/.claude/agents/")} の定義`);
 }
 
 function skillsCard(c) {
   const body = namedList(c.skills, (s) => `<span class="cfg-meta">ファイル ${s.fileCount}</span>`);
-  return card("skills", "スキル", c.skills.length, body, `${code(".claude/skills/<名前>/SKILL.md")}`);
+  return card("skills", "スキル", c.skills.length, body, `${code(".claude/skills/<名前>/SKILL.md")}・${code("~/.claude/skills/")}`);
 }
 
 function commandsCard(c) {
   const body = namedList(c.commands, (m) => (m.argumentHint ? `<span class="cfg-meta">${escapeHtml(m.argumentHint)}</span>` : ""));
-  return card("commands", "コマンド", c.commands.length, body, `${code(".claude/commands/")} のスラッシュコマンド`);
+  return card("commands", "コマンド", c.commands.length, body, `${code(".claude/commands/")}・${code("~/.claude/commands/")} のスラッシュコマンド`);
 }
 
 const keyChips = (label, list) =>
@@ -70,7 +90,7 @@ function mcpCard(c) {
         })
         .join("")}</ul>`
     : none();
-  return card("mcp", "MCP サーバー", c.mcpServers.length, body, `${code(".mcp.json")}。状態は settings の承認設定から判定（未承認は起動時に確認が出る）`);
+  return card("mcp", "MCP サーバー", c.mcpServers.length, body, `${code(".mcp.json")}。状態は settings の承認設定から判定（未承認は起動時に確認が出る）。local・user 範囲で登録した MCP（${code("~/.claude.json")}）は表示しません`);
 }
 
 function pluginsCard(c) {
@@ -81,10 +101,12 @@ function pluginsCard(c) {
   return card("plugins", "プラグイン", c.plugins.length, rows.length ? `<ul class="cfg-rows">${rows.join("")}</ul>` : none(), `settings の ${code("enabledPlugins")}・${code("extraKnownMarketplaces")}`);
 }
 
-function hooksCard(c) {
+function hooksCard(c, allHooks) {
   let body;
-  if (!c.hooks.length) {
+  if (!c.hooks.length && !allHooks.some((h) => h.agentVillage)) {
     body = `${none()}<div class="cfg-note warn">エージェントの作業中・権限待ちを表示するには、Agent Village のフック（agent-village-hook）の設定が必要です（${code("docs/setup.md")} §10）。</div>`;
+  } else if (!c.hooks.length) {
+    body = none();
   } else {
     const byEvent = new Map();
     for (const h of c.hooks) byEvent.set(h.event, [...(byEvent.get(h.event) || []), h]);
@@ -97,8 +119,10 @@ function hooksCard(c) {
           .join("")}</ul></div>`
       )
       .join("");
-    if (!c.hooks.some((h) => h.agentVillage)) body += `<div class="cfg-note warn">Agent Village のフック（agent-village-hook）が見つかりません。作業状態は表示されません（${code("docs/setup.md")} §10）。</div>`;
+    if (!allHooks.some((h) => h.agentVillage)) body += `<div class="cfg-note warn">Agent Village のフック（agent-village-hook）が見つかりません。作業状態は表示されません（${code("docs/setup.md")} §10）。</div>`;
   }
+  const userOnly = !c.hooks.some((h) => h.agentVillage) && allHooks.some((h) => h.agentVillage && h.scope === "user");
+  if (userOnly && scopeFilter === "project") body += `<div class="cfg-note">Agent Village のフックはユーザー全体の設定（${code("~/.claude/settings.json")}）にあります。</div>`;
   return card("hooks", "フック", c.hooks.length, body, "settings の " + code("hooks"));
 }
 
@@ -135,11 +159,38 @@ function sourcesHtml(c) {
     <ul class="cfg-rows">${c.sources
       .map((s) => `<li class="cfg-row"><span class="cfg-mono">${escapeHtml(s.file)}</span><span class="cfg-state ${s.status === "ok" ? "ok" : s.status === "error" ? "err" : "off"}">${SOURCE_STATUS[s.status]}</span>${s.error ? `<span class="cfg-err">${escapeHtml(s.error)}</span>` : ""}</li>`)
       .join("")}</ul>
-    <div class="cfg-note">APIキーなどの秘密情報は、サーバー側で伏せてから表示しています（${code("•••")}）。プロジェクトのフォルダの外（ユーザー全体の設定）は読んでいません。</div>
+    <div class="cfg-note">APIキーなどの秘密情報は、サーバー側で伏せてから表示しています（${code("•••")}）。ユーザー全体の設定は ${code("~/.claude/")} の中だけを読みます。ログイン情報も入っている ${code("~/.claude.json")} は読みません。</div>
   </section>`;
 }
 
-function render(c) {
+// Items carry scope "project" | "user"; sources are filtered by their path label.
+function filtered(c) {
+  if (scopeFilter === "all") return c;
+  const keep = (list) => list.filter((i) => (i.scope || "project") === scopeFilter);
+  return {
+    ...c,
+    agents: keep(c.agents),
+    skills: keep(c.skills),
+    commands: keep(c.commands),
+    mcpServers: scopeFilter === "project" ? c.mcpServers : [],
+    plugins: keep(c.plugins),
+    marketplaces: keep(c.marketplaces),
+    hooks: keep(c.hooks),
+    env: keep(c.env),
+    memory: keep(c.memory),
+    permissions: Object.fromEntries(Object.entries(c.permissions).map(([k, v]) => [k, keep(v)])),
+    sources: keep(c.sources),
+  };
+}
+
+function renderScopeFilter() {
+  document.querySelectorAll("#config-scope button").forEach((b) => b.classList.toggle("active", b.dataset.scope === scopeFilter));
+}
+
+function render(full) {
+  lastConfig = full;
+  renderScopeFilter();
+  const c = filtered(full);
   const sections = [
     ["agents", "エージェント", c.agents.length],
     ["skills", "スキル", c.skills.length],
@@ -157,7 +208,7 @@ function render(c) {
   document.getElementById("config-root").textContent = c.root;
   document.getElementById("config-root").title = c.root;
   document.getElementById("config-body").innerHTML = `<div class="cfg-grid">
-    ${agentsCard(c)}${skillsCard(c)}${commandsCard(c)}${mcpCard(c)}${hooksCard(c)}${permissionsCard(c)}${pluginsCard(c)}${envCard(c)}${memoryCard(c)}
+    ${agentsCard(c)}${skillsCard(c)}${commandsCard(c)}${mcpCard(c)}${hooksCard(c, full.hooks)}${permissionsCard(c)}${pluginsCard(c)}${envCard(c)}${memoryCard(c)}
   </div>${sourcesHtml(c)}`;
 }
 
@@ -181,6 +232,18 @@ async function load() {
 
 export function initConfig() {
   document.getElementById("config-reload-btn").addEventListener("click", load);
+  document.getElementById("config-scope").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-scope]");
+    if (!b || b.dataset.scope === scopeFilter) return;
+    scopeFilter = b.dataset.scope;
+    try {
+      localStorage.setItem(SCOPE_KEY, scopeFilter);
+    } catch {
+      // storage unavailable — the choice just isn't remembered
+    }
+    if (lastConfig) render(lastConfig);
+  });
+  renderScopeFilter();
   // Lazy: nothing is read until the view is first opened; reopening re-reads so
   // edits made in the meantime show up.
   document.addEventListener("village:view", (e) => {

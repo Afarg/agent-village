@@ -92,6 +92,11 @@
 
     <section id="config-view" hidden>
       <div id="config-toolbar">
+        <div id="config-scope" role="group" aria-label="表示する範囲">
+          <button type="button" data-scope="all">すべて</button>
+          <button type="button" data-scope="project">プロジェクト</button>
+          <button type="button" data-scope="user">ユーザー全体</button>
+        </div>
         <div id="config-summary"></div>
         <span id="config-root" class="config-root"></span>
         <button class="btn" id="config-reload-btn" type="button">再読み込み</button>

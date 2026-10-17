@@ -629,6 +629,50 @@ body {
   flex: 1 1 auto;
 }
 
+#config-scope {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+#config-scope button {
+  padding: 4px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+#config-scope button + button {
+  border-left: 1px solid var(--line);
+}
+
+#config-scope button.active {
+  background: var(--accent);
+  color: var(--wood-900);
+  font-weight: 600;
+}
+
+.cfg-scope {
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(143, 179, 196, 0.18);
+  color: var(--done);
+  white-space: nowrap;
+}
+
+.cfg-src.user {
+  color: var(--done);
+}
+
+.cfg-meta.warn {
+  color: var(--accent);
+}
+
 .cfg-jump {
   display: inline-flex;
   align-items: center;
