@@ -25,6 +25,7 @@ const roomsStore = require("./lib/roomsStore");
 const decorStore = require("./lib/decorStore");
 const reportLog = require("./lib/reportLog");
 const projectRegistry = require("./lib/projectRegistry");
+const { readConfigOverview } = require("./lib/configOverview");
 
 // See docs/design/04-multi-project-integration.md for the install-root vs.
 // target-root split this implements.
@@ -742,6 +743,16 @@ app.delete("/api/rooms/:roomId/decor", (req, res) => {
   if (!roomsStore.resetRoomDecor(roomId)) return res.status(404).json({ error: `未知の部屋です: ${roomId}` });
   broadcastRoomDecorChanged([roomId]);
   res.json({ ok: true });
+});
+
+// ---- config overview (docs/design/10-config-overview.md) -------------------------------------------------
+// Re-read on every request: settings files change rarely, so no watcher.
+app.get("/api/config", (req, res) => {
+  try {
+    res.json(readConfigOverview(TARGET_ROOT));
+  } catch (err) {
+    res.status(500).json({ error: `構成の読み込みに失敗しました: ${err.message}` });
+  }
 });
 
 // ---- project switcher (docs/design/11-project-switcher.md §3-§4) -------------------------------------------------

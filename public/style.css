@@ -601,6 +601,302 @@ body {
   align-self: center;
 }
 
+/* ---- config view (docs/design/10-config-overview.md) ---- */
+#config-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 12px;
+  gap: 12px;
+}
+
+#config-view[hidden] {
+  display: none;
+}
+
+#config-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+#config-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1 1 auto;
+}
+
+.cfg-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cfg-jump:hover {
+  background: var(--surface-hover);
+}
+
+.cfg-jump b {
+  color: var(--wood-100);
+}
+
+.cfg-jump.zero {
+  color: var(--text-muted);
+}
+
+.cfg-jump.zero b {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.cfg-jump.err {
+  border-color: var(--danger);
+}
+
+.config-root {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+#config-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.cfg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.cfg-card {
+  background: var(--inset);
+  border: 1px solid rgba(224, 182, 126, 0.12);
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  scroll-margin-top: 8px;
+}
+
+.cfg-sources {
+  margin-top: 12px;
+}
+
+.cfg-card h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  color: var(--wood-100);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cfg-count {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 0 7px;
+}
+
+.cfg-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.cfg-note.warn {
+  color: var(--accent);
+  margin-top: 6px;
+}
+
+.cfg-card code {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--wood-100);
+}
+
+.cfg-none {
+  margin: 4px 0;
+  color: var(--text-muted);
+}
+
+.cfg-list,
+.cfg-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.cfg-item {
+  padding: 6px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.cfg-item + .cfg-item,
+.cfg-row + .cfg-row {
+  border-top: 1px solid rgba(224, 182, 126, 0.08);
+}
+
+.cfg-item:hover,
+.cfg-item:focus-visible {
+  background: var(--surface);
+  outline: none;
+}
+
+.cfg-item.cfg-static {
+  cursor: default;
+}
+
+.cfg-item-head,
+.cfg-row,
+.cfg-kv {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cfg-row {
+  padding: 4px 2px;
+}
+
+.cfg-kv {
+  margin-top: 4px;
+}
+
+.cfg-name {
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.cfg-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.cfg-desc {
+  margin-top: 2px;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.cfg-item.expanded .cfg-desc {
+  display: block;
+}
+
+.cfg-mono {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.cfg-src {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.cfg-state {
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+
+.cfg-state.ok {
+  color: var(--working);
+}
+
+.cfg-state.off {
+  color: var(--text-muted);
+}
+
+.cfg-state.warn {
+  color: var(--accent);
+}
+
+.cfg-state.err,
+.cfg-err {
+  color: var(--danger);
+}
+
+.cfg-group + .cfg-group {
+  margin-top: 6px;
+}
+
+.cfg-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--wood-300);
+}
+
+.cfg-perm-cols {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cfg-perm summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--wood-100);
+  padding: 2px 0;
+}
+
+.cfg-perm summary::before {
+  content: "▸";
+  color: var(--text-muted);
+}
+
+.cfg-perm[open] summary::before {
+  content: "▾";
+}
+
+.cfg-perm .cfg-rows {
+  max-height: 280px;
+  overflow-y: auto;
+}
+
 /* ---- agent / room list ---- */
 /* The list scrolls on its own so a selected item's detail panel always keeps
    most of the sidebar (2-3 left it squeezed under a long list). */

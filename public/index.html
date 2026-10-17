@@ -14,6 +14,7 @@
       <div id="view-switcher">
         <button class="tab-btn active" data-view="office" type="button">オフィス</button>
         <button class="tab-btn" data-view="reports" type="button">レポート</button>
+        <button class="tab-btn" data-view="config" type="button">構成</button>
       </div>
       <div id="status-summary" aria-live="polite"></div>
       <button class="btn" id="notify-toggle" type="button">🔕 通知オフ</button>
@@ -87,6 +88,15 @@
       </div>
       <div id="reports-list" class="detail-panel"></div>
       <button class="btn" id="reports-load-more-btn" type="button" hidden>もっと読み込む</button>
+    </section>
+
+    <section id="config-view" hidden>
+      <div id="config-toolbar">
+        <div id="config-summary"></div>
+        <span id="config-root" class="config-root"></span>
+        <button class="btn" id="config-reload-btn" type="button">再読み込み</button>
+      </div>
+      <div id="config-body"><p class="hint">読み込み中…</p></div>
     </section>
   </div>
 

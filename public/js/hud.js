@@ -93,15 +93,18 @@ function initTabs() {
 // ---------------------------------------------------- view switcher ---
 // Same hidden-attribute toggle initTabs() uses for the two sidebar tabs,
 // promoted to whole-page scope: "オフィス" (office map + sidebar) vs.
-// "レポート" (docs/design/08-report-history.md, an independent full-width
-// screen, not squeezed into the 360px sidebar).
+// "レポート" (docs/design/08-report-history.md) vs. "構成"
+// (docs/design/10-config-overview.md) — independent full-width screens, not
+// squeezed into the 360px sidebar.
+const VIEW_ELEMENTS = { office: "hud-main", reports: "reports-view", config: "config-view" };
+
 function initViewSwitcher() {
   const buttons = document.querySelectorAll("#view-switcher .tab-btn");
   buttons.forEach((btn) => {
     btn.addEventListener("click", () => {
       buttons.forEach((b) => b.classList.toggle("active", b === btn));
-      document.getElementById("hud-main").hidden = btn.dataset.view !== "office";
-      document.getElementById("reports-view").hidden = btn.dataset.view !== "reports";
+      for (const [view, id] of Object.entries(VIEW_ELEMENTS)) document.getElementById(id).hidden = btn.dataset.view !== view;
+      document.dispatchEvent(new CustomEvent("village:view", { detail: { view: btn.dataset.view } }));
     });
   });
 }
