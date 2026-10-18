@@ -14,6 +14,8 @@ async function bootstrap() {
   initConfig();
   await initUnread();
   await store.init();
+  await store.loadDisplaySettings();
+  store.startStaleTimer();
   initReports();
   await initGame("game-container");
   store.connectSSE();

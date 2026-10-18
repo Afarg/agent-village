@@ -787,6 +787,7 @@ function villageSettingsBody() {
     settings,
     resolvedMachineLogDir: villageSettings.resolveDir(TARGET_ROOT, settings.machineLog.dir),
     defaultMachineLogDir: villageSettings.DEFAULT_MACHINE_LOG_DIR,
+    defaultStaleAfterMinutes: villageSettings.DEFAULT_STALE_AFTER_MINUTES,
     file: path.relative(TARGET_ROOT, villageSettings.settingsFile(TARGET_ROOT)).split(path.sep).join("/"),
   };
 }
@@ -795,7 +796,21 @@ app.get("/api/village-settings", (req, res) => {
   res.json(villageSettingsBody());
 });
 
+// Body: { machineLog: {...} } or { display: { staleAfterMinutes } } (docs/design/13 §2.1).
 app.put("/api/village-settings", (req, res) => {
+  const disp = req.body && req.body.display;
+  if (disp !== undefined) {
+    if (!disp || typeof disp !== "object") return res.status(400).json({ error: "displayはオブジェクトで指定してください" });
+    try {
+      const r = villageSettings.writeDisplay(TARGET_ROOT, disp);
+      if (r.error) return res.status(400).json({ error: r.error });
+    } catch (err) {
+      return res.status(500).json({ error: `設定を保存できませんでした: ${err.message}` });
+    }
+    // Every open tab re-judges 応答なし？ with the new threshold.
+    sendEvent("village-settings-changed", villageSettingsBody());
+    return res.json(villageSettingsBody());
+  }
   const ml = req.body && req.body.machineLog;
   if (!ml || typeof ml !== "object") return res.status(400).json({ error: "machineLogを指定してください" });
   if (ml.enabled !== undefined && typeof ml.enabled !== "boolean") return res.status(400).json({ error: "enabledはtrue/falseで指定してください" });

@@ -1,8 +1,8 @@
-import { store } from "./store.js";
+import { store, isDummyAgent, isStale, sinceLabel } from "./store.js";
 import { PARTS, builtinPartDataUrl } from "./decor/parts.js";
 import { resolveDecor } from "./decor/themes.js";
 import { contextBlockHtml, tickContextElapsed } from "./contexts.js";
-import { unreadOf, isShownUnread, closedAgent } from "./unread.js";
+import { unreadOf, isShownUnread, closedAgent, projectKeyOf } from "./unread.js";
 
 const STATUS_LABEL = {
   idle: "待機中",
@@ -112,27 +112,126 @@ function initViewSwitcher() {
 }
 
 // ------------------------------------------------------- agent list ---
-function renderAgentList() {
-  const listEl = document.getElementById("agent-list");
-  const agents = store.getAgents().sort((a, b) => a.roomLabel.localeCompare(b.roomLabel, "ja"));
+// Grouped by assigned room (docs/design/13-room-groups-and-stale.md §1): a
+// header per room carries the "needs you" marks (permission waits, errors,
+// unread) so a folded room still shows what is inside it.
+const GROUPS_KEY = "agentVillage.roomGroups";
+let groupOpen = null; // roomId -> boolean, only for rooms toggled (or opened by a selection)
 
-  listEl.innerHTML = agents
-    .map((a) => {
-      const thumbStyle = a.spriteUrl
-        ? `background-image:url('${a.spriteUrl}')`
-        : `background-color:${a.paletteMain || "#94b0c2"}`;
-      const pp = a.pendingPermission;
-      const expanded = !!pp && expandedPermissionRows.has(a.agentId);
-      return `
+function readAllGroupState() {
+  try {
+    const all = JSON.parse(localStorage.getItem(GROUPS_KEY) || "{}");
+    return all && typeof all === "object" ? all : {};
+  } catch {
+    return {};
+  }
+}
+
+function groupState() {
+  if (!groupOpen) {
+    const mine = readAllGroupState()[projectKeyOf()];
+    groupOpen = mine && typeof mine === "object" ? mine : {};
+  }
+  return groupOpen;
+}
+
+function saveGroupState() {
+  try {
+    const all = readAllGroupState();
+    all[projectKeyOf()] = groupOpen;
+    localStorage.setItem(GROUPS_KEY, JSON.stringify(all));
+  } catch {
+    // storage blocked — the open/closed state lasts for this page only
+  }
+}
+
+// Rooms in rooms.json order, then the generic desk, then the break room.
+function roomOrder() {
+  const r = store.rooms;
+  if (!r) return [];
+  return [...r.rooms.map((x) => x.id), "generic", r.breakRoom.id];
+}
+
+function agentGroups() {
+  const order = roomOrder();
+  const byRoom = new Map();
+  for (const a of store.getAgents()) {
+    if (!byRoom.has(a.roomId)) byRoom.set(a.roomId, { roomId: a.roomId, label: a.roomLabel, agents: [] });
+    byRoom.get(a.roomId).agents.push(a);
+  }
+  const rank = (id) => (order.includes(id) ? order.indexOf(id) : order.length);
+  return [...byRoom.values()]
+    .sort((x, y) => rank(x.roomId) - rank(y.roomId) || x.label.localeCompare(y.label, "ja"))
+    .map((g) => ({ ...g, agents: g.agents.sort((a, b) => a.displayName.localeCompare(b.displayName, "ja")) }));
+}
+
+function isGroupOpen(g) {
+  const st = groupState();
+  if (typeof st[g.roomId] === "boolean") return st[g.roomId];
+  return !g.agents.every(isDummyAgent); // dummy-only rooms start folded
+}
+
+// Opens the room holding a just-selected agent so the selection stays visible.
+function revealAgentGroup(agentId) {
+  const a = store.getAgent(agentId);
+  if (!a) return;
+  const g = agentGroups().find((x) => x.roomId === a.roomId);
+  if (g && !isGroupOpen(g)) {
+    groupState()[g.roomId] = true;
+    saveGroupState();
+  }
+}
+
+function groupHeadHtml(g, open) {
+  const now = Date.now();
+  const waiting = g.agents.filter((a) => a.pendingPermission).length;
+  const errors = g.agents.filter((a) => a.status === "error").length;
+  const stale = g.agents.filter((a) => isStale(a, now)).length;
+  const busy = g.agents.filter((a) => (a.status === "working" || a.status === "assigned") && !isDummyAgent(a) && !isStale(a, now)).length;
+  let unread = 0;
+  let unreadError = false;
+  for (const a of g.agents) {
+    const c = unreadOf(a.agentId);
+    if (c && c.total) {
+      unread += c.total;
+      unreadError ||= c.error > 0;
+    }
+  }
+  const attention = waiting || errors || unread;
+  const marks = [
+    busy ? `<span class="rg-mark rg-busy" title="作業中の人数">作業中 ${busy}</span>` : "",
+    waiting ? `<span class="rg-mark rg-wait" title="許可を待っている人数">🔒${waiting}</span>` : "",
+    errors ? `<span class="rg-mark rg-error" title="エラーの人数">⚠${errors}</span>` : "",
+    stale ? `<span class="rg-mark rg-stale" title="長く更新のない作業中の人数">応答なし？${stale}</span>` : "",
+    unread ? `<span class="count-badge${unreadError ? " error" : ""}" title="未読の報告 ${unread}件">${unread}</span>` : "",
+  ].join("");
+  return `<button type="button" class="room-group-head${attention ? " attention" : ""}${unreadError || errors ? " attention-error" : ""}" aria-expanded="${open}">
+      <span class="rg-caret">${open ? "▾" : "▸"}</span>
+      <span class="rg-label">${escapeHtml(g.label)}</span>
+      <span class="rg-count">${g.agents.length}人</span>
+      <span class="rg-marks">${marks}</span>
+    </button>`;
+}
+
+function staleHint(a) {
+  return `最終更新から ${sinceLabel(a.updatedAt)}、終了の記録が届いていません。Claude Code 側で作業が止まった可能性があります。`;
+}
+
+function agentRowHtml(a) {
+  const thumbStyle = a.spriteUrl ? `background-image:url('${a.spriteUrl}')` : `background-color:${a.paletteMain || "#94b0c2"}`;
+  const pp = a.pendingPermission;
+  const expanded = !!pp && expandedPermissionRows.has(a.agentId);
+  const statusHtml = isStale(a)
+    ? `<span class="status-label stale" title="${escapeHtml(staleHint(a))}"><span class="status-dot status-stale"></span> 応答なし？（${sinceLabel(a.updatedAt)}）</span>`
+    : `<span class="status-label"><span class="status-dot status-${a.status}"></span> ${STATUS_LABEL[a.status] || a.status}</span>`;
+  return `
       <li class="list-item ${a.agentId === store.selectedAgentId ? "selected" : ""}" data-agent-id="${a.agentId}">
         <span class="thumb" style="${thumbStyle}"></span>
         <span>
           <div class="name">${escapeHtml(a.displayName)}${pp ? ` <span class="pp-dot" title="許可を待っています"></span>` : ""}${unreadBadgeHtml(a.agentId)}</div>
           <div class="role">${escapeHtml(a.roomLabel)} ${"★".repeat(a.modelStars || 0)}</div>
         </span>
-        <span class="status-label">
-          <span class="status-dot status-${a.status}"></span> ${STATUS_LABEL[a.status] || a.status}
-        </span>
+        ${statusHtml}
         ${pp ? `<button class="pp-caret" type="button" aria-expanded="${expanded}" aria-label="権限待ちの詳細を開閉">${expanded ? "▾" : "▸"}</button>` : ""}
         ${
           pp
@@ -140,8 +239,32 @@ function renderAgentList() {
             : ""
         }
       </li>`;
+}
+
+function renderAgentList() {
+  const listEl = document.getElementById("agent-list");
+  const scrollTop = listEl.scrollTop;
+
+  listEl.innerHTML = agentGroups()
+    .map((g) => {
+      const open = isGroupOpen(g);
+      return `<li class="room-group" data-room-id="${escapeHtml(g.roomId)}">
+        ${groupHeadHtml(g, open)}
+        <ul class="room-group-items" ${open ? "" : "hidden"}>${g.agents.map(agentRowHtml).join("")}</ul>
+      </li>`;
     })
     .join("");
+  listEl.scrollTop = scrollTop;
+
+  listEl.querySelectorAll(".room-group-head").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const roomId = btn.closest(".room-group").dataset.roomId;
+      const g = agentGroups().find((x) => x.roomId === roomId);
+      groupState()[roomId] = !isGroupOpen(g);
+      saveGroupState();
+      renderAgentList();
+    });
+  });
 
   listEl.querySelectorAll(".list-item").forEach((el) => {
     el.addEventListener("click", (e) => {
@@ -363,7 +486,7 @@ let contextsFetchSeq = 0;
 // A "running" context whose agent is no longer working never got its stop
 // record (crash, cancelled turn) — say so instead of a growing timer.
 function contextForDisplay(ctx, agent) {
-  if (ctx.state === "running" && !["working", "assigned"].includes(agent.status)) return { ...ctx, state: "unknown" };
+  if (ctx.state === "running" && (!["working", "assigned"].includes(agent.status) || isStale(agent))) return { ...ctx, state: "unknown" };
   return ctx;
 }
 
@@ -439,9 +562,10 @@ function renderAgentDetail() {
   panel.innerHTML = `
     <h3>${escapeHtml(agent.displayName)}</h3>
     <div class="meta">
-      ${escapeHtml(agent.roomLabel)} ・ ${STATUS_LABEL[agent.status] || agent.status}
+      ${escapeHtml(agent.roomLabel)} ・ ${isStale(agent) ? `応答なし？（${sinceLabel(agent.updatedAt)}）` : STATUS_LABEL[agent.status] || agent.status}
       ${agent.model ? ` ・ ${escapeHtml(agent.model)} ${"★".repeat(agent.modelStars || 0)}` : ""}
     </div>
+    ${isStale(agent) ? `<div class="meta stale-note">⏸ ${escapeHtml(staleHint(agent))}</div>` : ""}
     <div class="description">${escapeHtml(agent.description || "(説明なし)")}</div>
     ${toolsHtml ? `<div class="tools">${toolsHtml}</div>` : ""}
     ${agent.task ? `<div class="meta">現在のタスク: ${escapeHtml(agent.task.title)}</div>` : ""}
@@ -954,7 +1078,8 @@ export function initHud() {
   initRoomAddForm();
 
   store.subscribe((type, data) => {
-    if (["snapshot", "agent-change", "agent-removed", "select", "asset-change"].includes(type)) {
+    if (type === "select" && data.agentId) revealAgentGroup(data.agentId);
+    if (["snapshot", "agent-change", "agent-removed", "select", "asset-change", "stale-changed"].includes(type)) {
       renderAgentList();
       renderAgentDetail();
     }
@@ -975,6 +1100,7 @@ export function initHud() {
     if (type === "connection") {
       renderConnection(store.connected);
     }
+    if (type === "rooms") renderAgentList();
     if (type === "unread-changed") {
       renderAgentList();
       redrawAgentContexts();

@@ -9,6 +9,26 @@ export function isDummyAgent(agent) {
   return Array.isArray(agent.tools) && agent.tools.length === 0;
 }
 
+// docs/design/13-room-groups-and-stale.md §2.1 — "working"/"assigned" with no
+// state write for staleAfterMs is shown as 応答なし？. Display only: the state
+// file is never changed. Permission waits and dummies are never stale.
+const STALE_CHECK_MS = 10000;
+
+export function isStale(agent, now = Date.now()) {
+  if (!agent || isDummyAgent(agent) || agent.pendingPermission) return false;
+  if (agent.status !== "working" && agent.status !== "assigned") return false;
+  const t = Date.parse(agent.updatedAt);
+  return Number.isFinite(t) && now - t >= store.staleAfterMs;
+}
+
+// "2時間" / "45分" since the last state write.
+export function sinceLabel(iso, now = Date.now()) {
+  const min = Math.max(0, Math.floor((now - Date.parse(iso)) / 60000));
+  if (min < 60) return `${min}分`;
+  if (min < 48 * 60) return `${Math.floor(min / 60)}時間`;
+  return `${Math.floor(min / 1440)}日`;
+}
+
 class Store {
   constructor() {
     this.agents = new Map(); // agentId -> AgentCharacter
@@ -19,6 +39,40 @@ class Store {
     this.connected = false;
     this.serverTime = null;
     this.listeners = new Set();
+    this.staleAfterMs = 60 * 60000;
+    this.staleKey = "";
+  }
+
+  setStaleAfterMinutes(min) {
+    if (!Number.isInteger(min) || min <= 0) return;
+    this.staleAfterMs = min * 60000;
+    this.checkStale(true);
+  }
+
+  async loadDisplaySettings() {
+    try {
+      const body = await (await fetch("/api/village-settings")).json();
+      this.setStaleAfterMinutes(body.settings?.display?.staleAfterMinutes);
+    } catch {
+      // keep the default threshold
+    }
+  }
+
+  // Emits "stale-changed" only when the set of stale agents actually changes.
+  checkStale(force = false) {
+    const key = this.getAgents()
+      .filter((a) => isStale(a))
+      .map((a) => a.agentId)
+      .sort()
+      .join(",");
+    if (!force && key === this.staleKey) return;
+    this.staleKey = key;
+    this.emit("stale-changed", {});
+  }
+
+  startStaleTimer() {
+    if (this.staleTimer) return;
+    this.staleTimer = setInterval(() => this.checkStale(), STALE_CHECK_MS);
   }
 
   subscribe(fn) {
@@ -148,6 +202,11 @@ class Store {
     // folder, so nothing on screen is valid any more.
     es.addEventListener("project-changed", () => {
       window.location.reload();
+    });
+
+    es.addEventListener("village-settings-changed", (ev) => {
+      const msg = JSON.parse(ev.data);
+      this.setStaleAfterMinutes(msg.settings?.display?.staleAfterMinutes);
     });
 
     es.addEventListener("server-status", (ev) => {

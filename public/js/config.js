@@ -228,9 +228,11 @@ async function loadVillageSettings() {
 }
 
 let villageDefaultDir = "agents/machine-logs";
+let villageDefaultStale = 60;
 
-function renderVillageSettings(body, msg = "") {
+function renderVillageSettings(body, msg = "", staleMsg = "") {
   villageDefaultDir = body.defaultMachineLogDir;
+  villageDefaultStale = body.defaultStaleAfterMinutes;
   const ml = body.settings.machineLog;
   document.getElementById("village-settings").innerHTML = `<section class="cfg-card av-settings" id="cfg-village">
     <h3>Agent Village の設定<span class="cfg-scope">このダッシュボード用</span></h3>
@@ -246,7 +248,38 @@ function renderVillageSettings(body, msg = "") {
     </div>
     <div class="cfg-note">書き込み先: ${code(body.resolvedMachineLogDir)} ／ ${code("<エージェント>/<年-月-日>.ndjson")}。相対パスはプロジェクトのフォルダから数えます。場所を変えても、それまでのログは移動しません。</div>
     <div id="ml-msg">${msg}</div>
+    <div class="av-row av-sep">
+      <b>応答なし？の表示</b><span class="cfg-note">作業中のまま長く更新がないエージェントを「応答なし？」と表示します（表示だけで、状態は変えません）</span>
+    </div>
+    <div class="av-row">
+      <label for="stale-min">最終更新から</label>
+      <input type="number" id="stale-min" min="1" max="1440" step="1" value="${body.settings.display.staleAfterMinutes}" />
+      <span>分たったら</span>
+      <button class="btn" id="stale-save" type="button">保存</button>
+      <button class="btn" id="stale-default" type="button" ${body.settings.display.staleAfterMinutes === body.defaultStaleAfterMinutes ? "disabled" : ""}>既定（${body.defaultStaleAfterMinutes}分）に戻す</button>
+    </div>
+    <div class="cfg-note">フックが状態を書くのは、作業の開始・終了・許可待ちのときだけです。長い作業はずっと更新がないので、短くしすぎると動いている作業まで「応答なし？」になります。</div>
+    <div id="stale-msg">${staleMsg}</div>
   </section>`;
+}
+
+// 1〜1440 の整数だけを送る（サーバーでも同じ検証をする）。
+async function saveStaleMinutes(raw) {
+  const msgEl = document.getElementById("stale-msg");
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 1440) {
+    msgEl.innerHTML = `<div class="appearance-error">1〜1440 の整数で入力してください</div>`;
+    return;
+  }
+  msgEl.innerHTML = `<div class="cfg-note">保存中…</div>`;
+  try {
+    const res = await fetch("/api/village-settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ display: { staleAfterMinutes: n } }) });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    renderVillageSettings(body, "", `<div class="appearance-success">✓ 保存しました</div>`);
+  } catch (err) {
+    msgEl.innerHTML = `<div class="appearance-error">${escapeHtml(err.message)}</div>`;
+  }
 }
 
 async function saveVillageSettings(patch) {
@@ -307,9 +340,12 @@ export function initConfig() {
   document.getElementById("village-settings").addEventListener("click", (e) => {
     if (e.target.id === "ml-save") saveVillageSettings({ enabled: document.getElementById("ml-enabled").checked, dir: document.getElementById("ml-dir").value });
     if (e.target.id === "ml-default") saveVillageSettings({ dir: villageDefaultDir });
+    if (e.target.id === "stale-save") saveStaleMinutes(document.getElementById("stale-min").value);
+    if (e.target.id === "stale-default") saveStaleMinutes(villageDefaultStale);
   });
   document.getElementById("village-settings").addEventListener("keydown", (e) => {
     if (e.target.id === "ml-dir" && e.key === "Enter") document.getElementById("ml-save").click();
+    if (e.target.id === "stale-min" && e.key === "Enter") document.getElementById("stale-save").click();
   });
   document.getElementById("config-body").addEventListener("click", (e) => {
     const item = e.target.closest(".cfg-item:not(.cfg-static)");

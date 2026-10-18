@@ -212,6 +212,7 @@ frontmatter `color`（Claude Code の UI 色: red / blue / green / yellow / purp
 
 - `status=working` なのに `updatedAt` が **120 秒以上更新されない**場合、フロントは表示上 `stale` とみなし、キャラに「Zzz」演出（01 §4 の `paused`）+ 一覧に鮮度警告を出す。データ上の status は変更しない。
 - プロセス異常終了で error すら書かれないケースを、この鮮度判定が拾う。閾値は設定可能にする。
+- **2026-10-19 変更（`13-room-groups-and-stale.md` §2）**: フック方式（05）は開始・終了・許可待ちのときしか状態を書かないため、120秒では動いている作業まで stale になる。既定を **60分**（1〜1440分で設定可、`agents/config/village.json` の `display.staleAfterMinutes`）とし、許可待ちとダミーキャラは対象外にした。画面の表記は「応答なし？」。
 
 ---
 

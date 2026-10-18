@@ -1,6 +1,6 @@
 # 09. AIオフィス化 UI/UX刷新（フェーズ②）
 
-> ステータス: **2-6a 実装済み（2026-10-18）**。2-5（`63e4e48`）まで push 済み。2-6a（未読・作業ごとの区画・機械用ログ、別紙 `12-unread-reports-and-machine-log.md`）は実装・検証済み。2-6b 以降は未着手。
+> ステータス: **2-6b 実装済み（2026-10-19）**。2-6a（`5af0d7a`）まで push 済み。2-6b（一覧の部屋ごとのまとめ・応答なし？、別紙 `13-room-groups-and-stale.md`）は実装・検証済み。2-6c 以降は未着手。
 > 題材: **ビジネスシーンのオフィス**（2026-09-30 ユーザー指定）。木目・暖色の方向性（09-14）と両立させ、
 > 「オーク材のデスク・暖色グレーのタイルカーペット・クリーム色の壁・街並みの窓」のモダンオフィスとする。
 > 前提: 2026-09-14 に確定した方向性「解像度高めのドット絵・木材感のある暖色系・部屋ごとに
@@ -239,7 +239,7 @@
 | 2-4b ✅ | （ユーザー要望で追加）ヘッダーに接続中のプロジェクト名とパスを表示し、登録したプロジェクトに起動したまま切り替える。待ち受けを `127.0.0.1` に限定（2-5から前倒し）。設計と検証は別紙 `11-project-switcher.md` | `server/src/lib/projectRegistry.js`・`public/js/projects.js`（新規）、`index.js`、`index.html`、`store.js`、`alerts.js`、`style.css` |
 | 2-5 ✅ | 「構成」画面（読み取り専用）: プロジェクトのエージェント・スキル・コマンド・MCP・プラグイン・フック・権限・環境変数・CLAUDE.md を一覧表示。秘密情報はサーバー側で伏せる。読むのはプロジェクトのフォルダと `~/.claude/` の中だけ（`~/.claude.json` は読まない。2026-10-18 追加）。設計と検証は別紙 `10-config-overview.md`。待ち受けの `127.0.0.1` への限定は 2-4b で済み | `server/src/lib/configOverview.js`・`secretMask.js`・`public/js/config.js`（新規）、`index.js`、`index.html`、`hud.js`、`main.js`、`style.css` |
 | 2-6a ✅ | 未読の報告（バッジ・お知らせ・頭上の ✉・既読管理）、報告を作業（コンテキスト）ごとの区画にまとめ開始時刻を表示、機械用ログ（保存場所を設定可）。設計と検証は別紙 `12-unread-reports-and-machine-log.md` | `bin/agent-village-hook.js`、`server/src/lib/villageSettings.js`（新規）・`reportLog.js`、`index.js`、`public/js/unread.js`・`contexts.js`（新規）、`hud.js`、`reports.js`、`game.js`、`config.js`、`main.js`、`index.html`、`style.css` |
-| 2-6b | 一覧を部屋ごとにまとめて開閉、古くなった状態の表示（長時間更新がない「作業中」） | — |
+| 2-6b ✅ | 一覧を部屋ごとにまとめて開閉（見出しに許可待ち・エラー・未読・作業中・応答なし？の数）、長く更新のない「作業中」を「応答なし？」として表示（しきい値は設定可）。設計と検証は別紙 `13-room-groups-and-stale.md` | `server/src/lib/villageSettings.js`、`index.js`、`public/js/store.js`、`hud.js`、`alerts.js`、`game.js`、`config.js`、`unread.js`、`main.js`、`style.css` |
 | 2-6c | 詳細パネルとレポート画面の行き来、吹き出しのはみ出し対策、タイムライン | — |
 | 2-7 | 全体の検証（下記） | — |
 

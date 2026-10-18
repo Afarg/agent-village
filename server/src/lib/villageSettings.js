@@ -8,13 +8,18 @@ const fs = require("fs");
 const path = require("path");
 
 const DEFAULT_MACHINE_LOG_DIR = "agents/machine-logs";
+// docs/design/13-room-groups-and-stale.md §2.1 — "working" with no update for
+// this long is shown as 応答なし？ (hooks only write on start/stop/permission).
+const DEFAULT_STALE_AFTER_MINUTES = 60;
+const STALE_MIN = 1;
+const STALE_MAX = 1440;
 
 function settingsFile(root) {
   return path.join(root, "agents", "config", "village.json");
 }
 
 function defaults() {
-  return { machineLog: { enabled: true, dir: DEFAULT_MACHINE_LOG_DIR } };
+  return { machineLog: { enabled: true, dir: DEFAULT_MACHINE_LOG_DIR }, display: { staleAfterMinutes: DEFAULT_STALE_AFTER_MINUTES } };
 }
 
 function readRaw(root) {
@@ -30,12 +35,36 @@ function readSettings(root) {
   const raw = readRaw(root);
   const ml = raw.machineLog && typeof raw.machineLog === "object" ? raw.machineLog : {};
   const d = defaults().machineLog;
+  const disp = raw.display && typeof raw.display === "object" ? raw.display : {};
   return {
     machineLog: {
       enabled: typeof ml.enabled === "boolean" ? ml.enabled : d.enabled,
       dir: typeof ml.dir === "string" && ml.dir.trim() ? ml.dir.trim() : d.dir,
     },
+    display: {
+      staleAfterMinutes: validStaleMinutes(disp.staleAfterMinutes) ? disp.staleAfterMinutes : DEFAULT_STALE_AFTER_MINUTES,
+    },
   };
+}
+
+function validStaleMinutes(v) {
+  return Number.isInteger(v) && v >= STALE_MIN && v <= STALE_MAX;
+}
+
+function saveRaw(root, raw) {
+  const file = settingsFile(root);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(raw, null, 2) + "\n", "utf8");
+  fs.renameSync(tmp, file);
+}
+
+function writeDisplay(root, { staleAfterMinutes }) {
+  if (!validStaleMinutes(staleAfterMinutes)) return { error: `分数は ${STALE_MIN}〜${STALE_MAX} の整数で指定してください` };
+  const raw = readRaw(root);
+  raw.display = { ...(raw.display && typeof raw.display === "object" ? raw.display : {}), staleAfterMinutes };
+  saveRaw(root, raw);
+  return { settings: readSettings(root) };
 }
 
 function resolveDir(root, dir) {
@@ -74,11 +103,7 @@ function writeMachineLog(root, { enabled, dir }) {
   next.dir = next.dir.trim();
   const raw = readRaw(root);
   raw.machineLog = next;
-  const file = settingsFile(root);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(raw, null, 2) + "\n", "utf8");
-  fs.renameSync(tmp, file);
+  saveRaw(root, raw);
   return { settings: readSettings(root) };
 }
 
@@ -94,11 +119,13 @@ function machineLogFile(root, agentId, settings = readSettings(root), date = new
 
 module.exports = {
   DEFAULT_MACHINE_LOG_DIR,
+  DEFAULT_STALE_AFTER_MINUTES,
   settingsFile,
   readSettings,
   resolveDir,
   validateMachineLogDir,
   writeMachineLog,
+  writeDisplay,
   machineLogFile,
   localDateStamp,
 };

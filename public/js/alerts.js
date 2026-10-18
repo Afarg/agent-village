@@ -2,7 +2,7 @@
 // Both answer "does anything need me right now?" without reading the map:
 // permission waits first (they block an agent until a human answers), then
 // errors, then plain counts.
-import { store, isDummyAgent } from "./store.js";
+import { store, isDummyAgent, isStale } from "./store.js";
 
 const NOTIFY_PREF_KEY = "agentVillage.notify";
 
@@ -35,7 +35,10 @@ function renderSummary() {
     .filter((a) => a.pendingPermission)
     .sort((a, b) => String(a.pendingPermission.requestedAt).localeCompare(String(b.pendingPermission.requestedAt)));
   const errors = agents.filter((a) => a.status === "error" && !a.pendingPermission);
-  const count = (s) => agents.filter((a) => a.status === s).length;
+  // 応答なし？ (docs/design/13 §2.2) is counted on its own, not as working.
+  const now = Date.now();
+  const stale = agents.filter((a) => isStale(a, now));
+  const count = (s) => agents.filter((a) => a.status === s && !stale.includes(a)).length;
 
   const alerts = [
     ...waiting.map(
@@ -59,6 +62,9 @@ function renderSummary() {
     .map(([s, label]) => [s, label, count(s)])
     .filter(([s, , n]) => n > 0 || s === "working")
     .map(([s, label, n]) => `<span class="sum-count"><span class="status-dot status-${s}"></span>${label} <b>${n}</b></span>`);
+  if (stale.length) {
+    counts.splice(1, 0, `<span class="sum-count sum-stale" title="作業中のまま長く更新がありません（${stale.map((a) => escapeHtml(a.displayName)).join("・")}）"><span class="status-dot status-stale"></span>応答なし？ <b>${stale.length}</b></span>`);
+  }
 
   el.innerHTML = [
     ...alerts,
@@ -190,6 +196,6 @@ export function initAlerts() {
 
   store.subscribe((type, data) => {
     if (type === "agent-change") onAgentChange(data);
-    if (type === "snapshot" || type === "agent-change" || type === "agent-removed") renderSummary();
+    if (type === "snapshot" || type === "agent-change" || type === "agent-removed" || type === "stale-changed") renderSummary();
   });
 }

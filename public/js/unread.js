@@ -46,6 +46,10 @@ function saveMarks() {
 }
 
 // --------------------------------------------------------------- state ---
+export function projectKeyOf() {
+  return projectKey;
+}
+
 export function isCounted(entry) {
   return COUNTED.has(entry.level);
 }

@@ -1,7 +1,7 @@
 // Phaser 3 scene: renders the pixel-art "village" map and the agent characters.
 // Placeholder characters/rooms use geometric primitives (docs/design/03 §4.1 P0);
 // either can be swapped for a user-uploaded PNG via the HUD (see hud.js).
-import { store, isDummyAgent } from "./store.js";
+import { store, isDummyAgent, isStale } from "./store.js";
 import { C as DECOR_COLORS, PARTS, registerBuiltinParts } from "./decor/parts.js";
 import { resolveDecor } from "./decor/themes.js";
 import { unreadOf } from "./unread.js";
@@ -78,6 +78,13 @@ function pickWalkView(animation, facing) {
 // tools:[] convention already required to keep them out of
 // agent-dispatcher's delegation pool.
 const DUMMY_ALPHA = 0.45;
+// 応答なし？ (docs/design/13-room-groups-and-stale.md §2.2): faded + "Zzz".
+const STALE_ALPHA = 0.6;
+
+function baseAlpha(agent) {
+  if (isDummyAgent(agent)) return DUMMY_ALPHA;
+  return isStale(agent) ? STALE_ALPHA : 1;
+}
 
 // Speech bubble colors, matched to the warm palette (docs/design/09 §8).
 const BUBBLE_FILL = 0xfbf3e2;
@@ -373,7 +380,7 @@ class VillageScene extends Phaser.Scene {
   createCharacter(agent) {
     const spot = this.spotForStatus(agent);
     const container = this.add.container(spot.x, spot.y);
-    if (isDummyAgent(agent)) container.setAlpha(DUMMY_ALPHA);
+    container.setAlpha(baseAlpha(agent));
     const size = this.charSize;
 
     // All offsets/sizes below are expressed as ratios of `size`, matching the
@@ -412,6 +419,11 @@ class VillageScene extends Phaser.Scene {
       .setOrigin(0.5, 1)
       .setVisible(false);
 
+    const zzz = this.add
+      .text(-size / 2, -size / 2 + 2, "Zzz", { fontFamily: FONT_STACK, fontSize: "10px", color: "#cfd8dc", stroke: "#2a1d14", strokeThickness: 3, resolution: TEXT_RESOLUTION })
+      .setOrigin(0.5, 1)
+      .setVisible(false);
+
     const bubbleTail = this.add.graphics().setVisible(false);
     const bubbleBg = this.add.graphics().setVisible(false);
     // useAdvancedWrap: plain wordWrap only breaks at spaces, so Japanese text
@@ -429,7 +441,7 @@ class VillageScene extends Phaser.Scene {
 
     const selectRing = this.add.ellipse(0, size * 0.45, size * 1.4, size * 0.55, 0xffffff, 0.28).setVisible(false);
 
-    container.add([selectRing, body, head, eye, sprite, nameText, mail, bubbleTail, bubbleBg, bubbleText, emote]);
+    container.add([selectRing, body, head, eye, sprite, nameText, mail, zzz, bubbleTail, bubbleBg, bubbleText, emote]);
     for (const target of [body, head, sprite]) {
       target
         .setInteractive({ useHandCursor: true })
@@ -450,6 +462,7 @@ class VillageScene extends Phaser.Scene {
       nameShift: { x: 0, y: 0 },
       emote,
       mail,
+      zzz,
       bubbleTail,
       bubbleBg,
       bubbleText,
@@ -477,6 +490,7 @@ class VillageScene extends Phaser.Scene {
     else if (agent.spriteUrl) this.applyCharacterSprite(entry, agent.spriteUrl);
     if (agent.pendingPermission) this.showPermissionBubble(entry, agent.pendingPermission);
     this.refreshMail(entry);
+    this.refreshStale(entry);
     return entry;
   }
 
@@ -487,7 +501,7 @@ class VillageScene extends Phaser.Scene {
     // Dummy showcase characters (isDummyAgent) are permanently "working", so
     // their tags would sit on every wall forever — only on hover/selection.
     const s = entry.agent.status;
-    const busy = (s === "working" || s === "assigned") && !isDummyAgent(entry.agent);
+    const busy = (s === "working" || s === "assigned") && !isDummyAgent(entry.agent) && !isStale(entry.agent);
     const show = busy || entry.hovered || this.selectedId === entry.agent.agentId;
     if (entry.nameText.visible !== show) this.lastStackAt = -Infinity;
     entry.nameText.setVisible(show);
@@ -877,6 +891,12 @@ class VillageScene extends Phaser.Scene {
     this.refreshMail(entry);
   }
 
+  refreshStale(entry) {
+    entry.container.setAlpha(baseAlpha(entry.agent));
+    entry.zzz.setVisible(isStale(entry.agent));
+    this.refreshNameVisibility(entry);
+  }
+
   refreshMail(entry) {
     const c = unreadOf(entry.agent.agentId);
     entry.mail.setColor(c && c.error ? "#ff9a85" : "#f5e9d3");
@@ -993,9 +1013,8 @@ class VillageScene extends Phaser.Scene {
     }
 
     entry.nameText.setText(nextAgent.displayName);
-    entry.container.setAlpha(isDummyAgent(nextAgent) ? DUMMY_ALPHA : 1);
     entry.agent = nextAgent;
-    this.refreshNameVisibility(entry);
+    this.refreshStale(entry);
   }
 
   removeCharacter(agentId) {
@@ -1059,6 +1078,8 @@ class VillageScene extends Phaser.Scene {
       for (const roomId of data.roomIds) this.redrawRoom(roomId);
     } else if (type === "decor-library") {
       this.syncCustomParts();
+    } else if (type === "stale-changed") {
+      for (const entry of this.characters.values()) this.refreshStale(entry);
     } else if (type === "unread-changed") {
       for (const entry of this.characters.values()) this.refreshMail(entry);
     }

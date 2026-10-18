@@ -1214,6 +1214,7 @@ body {
 
 .row input[type="text"],
 #ml-dir,
+#stale-min,
 #reports-filter-bar select,
 #reports-filter-bar input[type="text"] {
   padding: 6px 8px;
@@ -1689,4 +1690,119 @@ select optgroup {
   flex: 1 1 260px;
   min-width: 0;
   font-family: Consolas, "Courier New", monospace;
+}
+
+/* ---- agent list grouped by room (docs/design/13-room-groups-and-stale.md §1) ---- */
+.room-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.room-group-items {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.room-group-items[hidden] {
+  display: none;
+}
+
+.room-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px 4px 6px;
+  border: 0;
+  border-left: 3px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.room-group-head:hover {
+  background: var(--surface-hover);
+}
+
+.room-group-head.attention {
+  border-left-color: var(--accent);
+}
+
+.room-group-head.attention-error {
+  border-left-color: var(--danger);
+}
+
+.rg-caret {
+  width: 10px;
+  color: var(--wood-300);
+}
+
+.rg-label {
+  color: var(--wood-100);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rg-count {
+  font-size: 11px;
+}
+
+.rg-marks {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.rg-mark {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.rg-busy { color: var(--working); }
+.rg-wait { color: var(--permission); font-weight: 600; }
+.rg-error { color: var(--danger); font-weight: 600; }
+.rg-stale { color: var(--text-muted); }
+
+/* ---- 応答なし？ (docs/design/13 §2.2) ---- */
+.status-stale {
+  background: transparent;
+  border: 1.5px dashed var(--text-muted);
+}
+
+.list-item .status-label.stale {
+  font-style: italic;
+}
+
+.stale-note {
+  color: var(--text-muted);
+  border-left: 2px dashed var(--text-muted);
+  padding-left: 6px;
+}
+
+.sum-stale {
+  opacity: 0.8;
+}
+
+.av-sep {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+#stale-min {
+  width: 80px;
 }
