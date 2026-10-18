@@ -2,11 +2,11 @@
 // 永続履歴(agents/logs/<agentId>.ndjson 経由、GET /api/reports)を横断表示する、
 // office画面とは独立した専用ビュー。hud.js の進捗ログ描画(.log-entry/.level-*)を
 // そのまま流用する。
+// 同じエージェントの同じ作業（コンテキスト）が続く行は、薄い枠の区画に
+// まとめ、作業の開始時刻を見出しにする(docs/design/12 §3.3)。
 import { store } from "./store.js";
-
-function escapeHtml(str) {
-  return String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
+import { escapeHtml, contextBlockHtml } from "./contexts.js";
+import { isShownUnread, openedAgent, closedAgent } from "./unread.js";
 
 const LEVELS = ["info", "warn", "error", "result"];
 
@@ -17,6 +17,7 @@ const filters = {
 };
 
 let nextCursor = null;
+let rows = []; // newest first, as shown
 let loading = false;
 let wasConnected = false;
 
@@ -32,13 +33,30 @@ function matchesFilter(entry) {
   return true;
 }
 
-function rowHtml(entry) {
-  return `
-    <div class="log-entry level-${entry.level} report-row">
-      <span class="ts">${new Date(entry.ts).toLocaleString("ja-JP")}</span>
-      <span class="chip report-agent">${escapeHtml(displayNameFor(entry.agentId))}</span>
-      ${escapeHtml(entry.text)}
-    </div>`;
+// Consecutive rows of one agent's one context -> one block.
+function groupRows(list) {
+  const blocks = [];
+  for (const entry of list) {
+    const last = blocks[blocks.length - 1];
+    if (last && last.agentId === entry.agentId && last.taskId === (entry.taskId ?? null)) last.reports.push(entry);
+    else blocks.push({ agentId: entry.agentId, taskId: entry.taskId ?? null, startedAt: entry.taskStartedAt || null, state: "none", reports: [entry] });
+  }
+  return blocks;
+}
+
+function renderRows() {
+  const listEl = document.getElementById("reports-list");
+  listEl.classList.toggle("empty", rows.length === 0);
+  listEl.innerHTML = rows.length
+    ? groupRows(rows)
+        .map((b) => contextBlockHtml(b, { isUnread: isShownUnread, agentLabel: displayNameFor(b.agentId), fullTime: !b.startedAt }))
+        .join("")
+    : `<p class="hint">まだ報告はありません</p>`;
+}
+
+// Filtering to one agent shows its reports, so they count as read (§4).
+function readFilteredAgent() {
+  if (filters.agentId && !document.getElementById("reports-view").hidden) openedAgent(filters.agentId);
 }
 
 function buildQuery({ cursor } = {}) {
@@ -75,14 +93,8 @@ async function fetchPage({ reset }) {
     nextCursor = body.nextCursor;
     loadMoreBtn.hidden = nextCursor == null;
 
-    if (reset) {
-      listEl.classList.toggle("empty", body.reports.length === 0);
-      listEl.innerHTML = body.reports.length
-        ? body.reports.map(rowHtml).join("")
-        : `<p class="hint">まだ報告はありません</p>`;
-    } else {
-      listEl.insertAdjacentHTML("beforeend", body.reports.map(rowHtml).join(""));
-    }
+    rows = reset ? body.reports : [...rows, ...body.reports];
+    renderRows();
   } catch (err) {
     listEl.innerHTML = `<p class="hint">読み込みに失敗しました: ${escapeHtml(err.message)}</p>`;
   } finally {
@@ -96,19 +108,17 @@ function refetch() {
 }
 
 function prependRow(entry) {
-  const listEl = document.getElementById("reports-list");
-  if (listEl.classList.contains("empty")) {
-    listEl.classList.remove("empty");
-    listEl.innerHTML = "";
-  }
-  listEl.insertAdjacentHTML("afterbegin", rowHtml(entry));
+  rows = [entry, ...rows];
+  renderRows();
 }
 
 let searchDebounce = null;
 
 function initFilterControls() {
   document.getElementById("reports-agent-filter").addEventListener("change", (e) => {
+    if (filters.agentId) closedAgent(filters.agentId);
     filters.agentId = e.target.value;
+    readFilteredAgent();
     refetch();
   });
 
@@ -136,6 +146,12 @@ export function initReports() {
   renderAgentOptions();
   initFilterControls();
   refetch();
+  document.addEventListener("village:view", (e) => {
+    if (e.detail.view === "reports") {
+      readFilteredAgent();
+      renderRows();
+    }
+  });
 
   store.subscribe((type, data) => {
     if (type === "report-added" && matchesFilter(data.entry)) {
@@ -144,6 +160,7 @@ export function initReports() {
     if (type === "snapshot" || type === "agent-change" || type === "agent-removed") {
       renderAgentOptions();
     }
+    if (type === "unread-changed" && !document.getElementById("reports-view").hidden) renderRows();
     if (type === "connection") {
       // SSE reconnects can miss report-added events during the gap — self-heal
       // by resyncing the current page, same idea as store.init() does for

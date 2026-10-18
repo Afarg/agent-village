@@ -1,6 +1,8 @@
 import { store } from "./store.js";
 import { PARTS, builtinPartDataUrl } from "./decor/parts.js";
 import { resolveDecor } from "./decor/themes.js";
+import { contextBlockHtml, tickContextElapsed } from "./contexts.js";
+import { unreadOf, isShownUnread, closedAgent } from "./unread.js";
 
 const STATUS_LABEL = {
   idle: "待機中",
@@ -125,7 +127,7 @@ function renderAgentList() {
       <li class="list-item ${a.agentId === store.selectedAgentId ? "selected" : ""}" data-agent-id="${a.agentId}">
         <span class="thumb" style="${thumbStyle}"></span>
         <span>
-          <div class="name">${escapeHtml(a.displayName)}${pp ? ` <span class="pp-dot" title="許可を待っています"></span>` : ""}</div>
+          <div class="name">${escapeHtml(a.displayName)}${pp ? ` <span class="pp-dot" title="許可を待っています"></span>` : ""}${unreadBadgeHtml(a.agentId)}</div>
           <div class="role">${escapeHtml(a.roomLabel)} ${"★".repeat(a.modelStars || 0)}</div>
         </span>
         <span class="status-label">
@@ -162,6 +164,12 @@ function renderAgentList() {
       else expandedPermissionRows.delete(agentId);
     });
   });
+}
+
+function unreadBadgeHtml(agentId) {
+  const c = unreadOf(agentId);
+  if (!c || !c.total) return "";
+  return ` <span class="count-badge${c.error ? " error" : ""}" title="未読の報告 ${c.total}件">${c.total}</span>`;
 }
 
 function tickPermissionElapsed() {
@@ -343,11 +351,80 @@ function attachAgentAnimationHandlers(agentId) {
   }
 }
 
+// ------------------------------------------- reports by context (12 §3.3) ---
+// The detail panel is rebuilt on every store event, so the fetched contexts
+// are cached here and re-inserted; only #agent-contexts is redrawn when a
+// fetch completes.
+const CONTEXT_PAGE = 5;
+let agentContexts = { agentId: null, contexts: [], nextBefore: null, loading: false, error: null };
+let agentEditOpen = false;
+let contextsFetchSeq = 0;
+
+// A "running" context whose agent is no longer working never got its stop
+// record (crash, cancelled turn) — say so instead of a growing timer.
+function contextForDisplay(ctx, agent) {
+  if (ctx.state === "running" && !["working", "assigned"].includes(agent.status)) return { ...ctx, state: "unknown" };
+  return ctx;
+}
+
+function agentContextsHtml(agent) {
+  const st = agentContexts;
+  if (st.agentId !== agent.agentId || (st.loading && !st.contexts.length)) return '<p class="hint">読み込み中…</p>';
+  if (st.error) return `<p class="hint">読み込みに失敗しました: ${escapeHtml(st.error)}</p>`;
+  if (!st.contexts.length) return '<p class="hint">まだ報告はありません</p>';
+  return (
+    st.contexts.map((ctx) => contextBlockHtml(contextForDisplay(ctx, agent), { isUnread: isShownUnread })).join("") +
+    (st.nextBefore ? `<button class="btn ctx-more" id="agent-contexts-more" type="button" ${st.loading ? "disabled" : ""}>さらに前の作業を表示</button>` : "")
+  );
+}
+
+function redrawAgentContexts() {
+  const el = document.getElementById("agent-contexts");
+  const agent = store.selectedAgentId ? store.getAgent(store.selectedAgentId) : null;
+  if (!el || !agent) return;
+  el.innerHTML = agentContextsHtml(agent);
+  attachAgentContextsHandlers();
+}
+
+function attachAgentContextsHandlers() {
+  document.getElementById("agent-contexts-more")?.addEventListener("click", () => loadAgentContexts(agentContexts.agentId, { reset: false }));
+}
+
+// reset: first page (or refresh keeping as many contexts as are shown);
+// otherwise append the next CONTEXT_PAGE older ones.
+async function loadAgentContexts(agentId, { reset, keepCount = false } = {}) {
+  const seq = ++contextsFetchSeq;
+  if (reset && !keepCount) agentContexts = { agentId, contexts: [], nextBefore: null, loading: true, error: null };
+  else agentContexts.loading = true;
+  const limit = keepCount ? Math.max(CONTEXT_PAGE, agentContexts.contexts.length) : CONTEXT_PAGE;
+  const params = new URLSearchParams({ agentId, limit: String(limit) });
+  if (!reset && agentContexts.nextBefore) params.set("before", agentContexts.nextBefore);
+  try {
+    const res = await fetch(`/api/reports/contexts?${params}`);
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    if (seq !== contextsFetchSeq) return;
+    agentContexts = {
+      agentId,
+      contexts: reset ? body.contexts : [...agentContexts.contexts, ...body.contexts],
+      nextBefore: body.nextBefore,
+      loading: false,
+      error: null,
+    };
+  } catch (err) {
+    if (seq !== contextsFetchSeq) return;
+    agentContexts = { ...agentContexts, agentId, loading: false, error: err.message };
+  }
+  redrawAgentContexts();
+}
+
 function renderAgentDetail() {
   const panel = document.getElementById("agent-detail-panel");
   const agent = store.selectedAgentId ? store.getAgent(store.selectedAgentId) : null;
 
   if (!agent) {
+    if (agentContexts.agentId) closedAgent(agentContexts.agentId);
+    agentContexts = { agentId: null, contexts: [], nextBefore: null, loading: false, error: null };
     panel.classList.add("empty");
     panel.innerHTML = `<p class="hint">キャラクター、または一覧の項目をクリックすると詳細が表示されます。</p>`;
     return;
@@ -356,13 +433,7 @@ function renderAgentDetail() {
   panel.classList.remove("empty");
 
   const toolsHtml = (agent.tools || []).map((t) => `<span class="chip">${escapeHtml(t)}</span>`).join("");
-  const logHtml = [...(agent.log || [])]
-    .reverse()
-    .map(
-      (l) =>
-        `<div class="log-entry level-${l.level}"><span class="ts">${new Date(l.ts).toLocaleTimeString("ja-JP")}</span>${escapeHtml(l.text)}</div>`
-    )
-    .join("");
+  if (agentContexts.agentId !== agent.agentId) loadAgentContexts(agent.agentId, { reset: true });
 
   const scrollTop = panel.scrollTop;
   panel.innerHTML = `
@@ -375,20 +446,26 @@ function renderAgentDetail() {
     ${toolsHtml ? `<div class="tools">${toolsHtml}</div>` : ""}
     ${agent.task ? `<div class="meta">現在のタスク: ${escapeHtml(agent.task.title)}</div>` : ""}
     ${agent.pendingPermission ? `<div class="meta">🔒 権限待ち: ${escapeHtml(agent.pendingPermission.tool)}</div>` : ""}
-    ${agent.result ? `<div class="meta">結果: ${escapeHtml(agent.result.summary || "")}</div>` : ""}
 
-    <h4>名前</h4>
-    ${agentRenameHtml(agent)}
+    <h4>報告（作業ごと）</h4>
+    <div id="agent-contexts">${agentContextsHtml(agent)}</div>
 
-    <h4>見た目</h4>
-    ${agentAppearanceEditorHtml(agent)}
+    <details class="agent-edit" ${agentEditOpen ? "open" : ""}>
+      <summary>名前・見た目・アニメーションを変更する</summary>
+      <h4>名前</h4>
+      ${agentRenameHtml(agent)}
 
-    <h4>アニメーション（まばたき・歩行）</h4>
-    ${agentAnimationEditorHtml(agent)}
+      <h4>見た目</h4>
+      ${agentAppearanceEditorHtml(agent)}
 
-    <h4>進捗ログ</h4>
-    ${logHtml || '<p class="hint">ログはまだありません</p>'}
+      <h4>アニメーション（まばたき・歩行）</h4>
+      ${agentAnimationEditorHtml(agent)}
+    </details>
   `;
+  panel.querySelector(".agent-edit").addEventListener("toggle", (e) => {
+    agentEditOpen = e.target.open;
+  });
+  attachAgentContextsHandlers();
 
   attachAgentRenameHandlers(agent.agentId);
   attachAgentAppearanceHandlers(agent.agentId);
@@ -898,12 +975,20 @@ export function initHud() {
     if (type === "connection") {
       renderConnection(store.connected);
     }
+    if (type === "unread-changed") {
+      renderAgentList();
+      redrawAgentContexts();
+    }
+    if (type === "report-added" && data.agentId === agentContexts.agentId) {
+      loadAgentContexts(data.agentId, { reset: true, keepCount: true });
+    }
   });
 
   setInterval(() => {
     const el = document.getElementById("server-time");
     el.textContent = store.serverTime ? `最終更新: ${new Date(store.serverTime).toLocaleTimeString("ja-JP")}` : "";
     tickPermissionElapsed();
+    tickContextElapsed();
   }, 1000);
 
   renderConnection(false);

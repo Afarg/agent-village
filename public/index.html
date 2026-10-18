@@ -43,7 +43,14 @@
         </div>
 
         <div id="tab-agents" class="tab-panel">
-          <h2>エージェント一覧</h2>
+          <div class="agents-head">
+            <h2>エージェント一覧</h2>
+            <div id="unread-wrap">
+              <button type="button" id="unread-badge" class="unread-badge" aria-haspopup="true" aria-expanded="false">未読なし</button>
+              <div id="unread-pop" class="unread-pop" hidden></div>
+              <div id="unread-toast" class="unread-toast" role="status" hidden></div>
+            </div>
+          </div>
           <ul id="agent-list"></ul>
           <div id="agent-detail-panel" class="detail-panel empty">
             <p class="hint">キャラクター、または一覧の項目をクリックすると詳細が表示されます。</p>
@@ -101,7 +108,10 @@
         <span id="config-root" class="config-root"></span>
         <button class="btn" id="config-reload-btn" type="button">再読み込み</button>
       </div>
-      <div id="config-body"><p class="hint">読み込み中…</p></div>
+      <div id="config-body">
+        <div id="village-settings"></div>
+        <div id="config-cards"><p class="hint">読み込み中…</p></div>
+      </div>
     </section>
   </div>
 

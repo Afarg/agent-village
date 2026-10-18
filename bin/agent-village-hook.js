@@ -27,6 +27,7 @@
 const fs = require("fs");
 const path = require("path");
 const { slugify } = require(path.join(__dirname, "..", "server", "src", "lib", "agentDefs.js"));
+const villageSettings = require(path.join(__dirname, "..", "server", "src", "lib", "villageSettings.js"));
 
 const DELAYED_IDLE_FLAG = "--delayed-idle";
 const IDLE_DELAY_MS = 5000;
@@ -85,6 +86,39 @@ function appendNdjsonLine(file, obj) {
   fs.appendFileSync(file, JSON.stringify(obj) + "\n", "utf8");
 }
 
+// docs/design/12-unread-reports-and-machine-log.md §5 — one NDJSON line per
+// event for investigating on the PC (grep/jq), in a folder the user can move
+// via agents/config/village.json. Fixed field set; tool_input and the raw
+// payload are never written (they can carry secrets). Any failure here is
+// swallowed: the human-facing files above must still be written.
+function writeMachineLog(projectRoot, agentId, payload, event, extra = {}) {
+  try {
+    const settings = villageSettings.readSettings(projectRoot);
+    if (!settings.machineLog.enabled) return;
+    const str = (v) => (typeof v === "string" && v ? v : null);
+    appendNdjsonLine(villageSettings.machineLogFile(projectRoot, agentId, settings), {
+      v: 1,
+      ts: nowIso(),
+      event,
+      agentId,
+      agentType: String(payload.agent_type || ""),
+      taskId: str(payload.agent_id),
+      sessionId: str(payload.session_id),
+      project: path.resolve(projectRoot),
+      cwd: str(payload.cwd),
+      permissionMode: str(payload.permission_mode),
+      transcriptPath: str(payload.agent_transcript_path) || str(payload.transcript_path),
+      tool: null,
+      message: null,
+      durationMs: null,
+      ...extra,
+    });
+  } catch (err) {
+    process.stderr.write(`[agent-village-hook] machine log write failed: ${err.message}
+`);
+  }
+}
+
 function handleSubagentStart(payload, projectRoot) {
   const agentId = slugify(payload.agent_type || "");
   if (!agentId) return;
@@ -109,6 +143,7 @@ function handleSubagentStart(payload, projectRoot) {
     result: null,
   });
   appendNdjsonLine(logFilePath(projectRoot, agentId), { ...entry, agentId, taskId: payload.agent_id || null });
+  writeMachineLog(projectRoot, agentId, payload, "start");
 }
 
 function handleSubagentStop(payload, projectRoot, hookScriptPath) {
@@ -134,6 +169,11 @@ function handleSubagentStop(payload, projectRoot, hookScriptPath) {
     result: { ok: true, summary, finishedAt: now },
   });
   appendNdjsonLine(logFilePath(projectRoot, agentId), { ...entry, agentId, taskId: payload.agent_id || null });
+  const startedMs = Date.parse(prevTask && prevTask.startedAt);
+  writeMachineLog(projectRoot, agentId, payload, "stop", {
+    message: String(payload.last_assistant_message || ""),
+    durationMs: Number.isFinite(startedMs) ? Date.parse(now) - startedMs : null,
+  });
 
   // Returning to idle after a "done" is the writer's responsibility
   // (docs/design/02-agent-state-model.md §4.2, "doneの寿命"). Do it from a
@@ -177,7 +217,12 @@ function handlePermissionRequest(payload, projectRoot) {
     level: "warn",
     text: `許可待ち: ${payload.tool_name || "(unknown tool)"}`,
     agentId,
-    taskId: null,
+    // PermissionRequest payloads carry no subagent id; the running task's id
+    // from the state file ties this line to its context (docs/design/12 §3.1).
+    taskId: (existing.task && existing.task.taskId) || null,
+  });
+  writeMachineLog(projectRoot, agentId, { ...payload, agent_id: payload.agent_id || (existing.task && existing.task.taskId) }, "permission", {
+    tool: String(payload.tool_name || "") || null,
   });
 }
 

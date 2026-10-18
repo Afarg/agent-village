@@ -207,13 +207,64 @@ function render(full) {
     (errors ? `<button type="button" class="cfg-jump err" data-target="cfg-sources">読めないファイル<b>${errors}</b></button>` : "");
   document.getElementById("config-root").textContent = c.root;
   document.getElementById("config-root").title = c.root;
-  document.getElementById("config-body").innerHTML = `<div class="cfg-grid">
+  document.getElementById("config-cards").innerHTML = `<div class="cfg-grid">
     ${agentsCard(c)}${skillsCard(c)}${commandsCard(c)}${mcpCard(c)}${hooksCard(c, full.hooks)}${permissionsCard(c)}${pluginsCard(c)}${envCard(c)}${memoryCard(c)}
   </div>${sourcesHtml(c)}`;
 }
 
+// ---- Agent Village's own settings (docs/design/12-unread-reports-and-machine-log.md §5.2) ----
+// Unlike everything below it, this card edits: it writes agents/config/village.json,
+// which only Agent Village (the hook) reads — never Claude Code's settings.
+async function loadVillageSettings() {
+  const slot = document.getElementById("village-settings");
+  try {
+    const res = await fetch("/api/village-settings");
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || "取得に失敗しました");
+    renderVillageSettings(body);
+  } catch (err) {
+    slot.innerHTML = `<section class="cfg-card av-settings"><h3>Agent Village の設定</h3><p class="hint">読み込みに失敗しました: ${escapeHtml(err.message)}</p></section>`;
+  }
+}
+
+let villageDefaultDir = "agents/machine-logs";
+
+function renderVillageSettings(body, msg = "") {
+  villageDefaultDir = body.defaultMachineLogDir;
+  const ml = body.settings.machineLog;
+  document.getElementById("village-settings").innerHTML = `<section class="cfg-card av-settings" id="cfg-village">
+    <h3>Agent Village の設定<span class="cfg-scope">このダッシュボード用</span></h3>
+    <div class="cfg-note">Claude Code の設定ではありません。保存先: ${code(body.file)}</div>
+    <div class="av-row">
+      <b>機械用ログ</b><span class="cfg-note">PC で調べるための記録（各エージェント・1日1ファイル・1行1件の JSON）</span>
+    </div>
+    <div class="av-row">
+      <label><input type="checkbox" id="ml-enabled" ${ml.enabled ? "checked" : ""} /> 記録する</label>
+      <input type="text" id="ml-dir" value="${escapeHtml(ml.dir)}" spellcheck="false" aria-label="機械用ログの保存場所" />
+      <button class="btn" id="ml-save" type="button">保存</button>
+      <button class="btn" id="ml-default" type="button" ${ml.dir === body.defaultMachineLogDir ? "disabled" : ""}>既定に戻す</button>
+    </div>
+    <div class="cfg-note">書き込み先: ${code(body.resolvedMachineLogDir)} ／ ${code("<エージェント>/<年-月-日>.ndjson")}。相対パスはプロジェクトのフォルダから数えます。場所を変えても、それまでのログは移動しません。</div>
+    <div id="ml-msg">${msg}</div>
+  </section>`;
+}
+
+async function saveVillageSettings(patch) {
+  const msgEl = document.getElementById("ml-msg");
+  msgEl.innerHTML = `<div class="cfg-note">保存中…</div>`;
+  try {
+    const res = await fetch("/api/village-settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machineLog: patch }) });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    renderVillageSettings(body, `<div class="appearance-success">✓ 保存しました</div>`);
+  } catch (err) {
+    msgEl.innerHTML = `<div class="appearance-error">${escapeHtml(err.message)}</div>`;
+  }
+}
+
 async function load() {
   if (loading) return;
+  loadVillageSettings();
   loading = true;
   const btn = document.getElementById("config-reload-btn");
   btn.disabled = true;
@@ -223,7 +274,7 @@ async function load() {
     if (!res.ok) throw new Error(body.error || "取得に失敗しました");
     render(body);
   } catch (err) {
-    document.getElementById("config-body").innerHTML = `<p class="hint">読み込みに失敗しました: ${escapeHtml(err.message)}</p>`;
+    document.getElementById("config-cards").innerHTML = `<p class="hint">読み込みに失敗しました: ${escapeHtml(err.message)}</p>`;
   } finally {
     loading = false;
     btn.disabled = false;
@@ -252,6 +303,13 @@ export function initConfig() {
   document.getElementById("config-summary").addEventListener("click", (e) => {
     const b = e.target.closest(".cfg-jump");
     if (b) document.getElementById(b.dataset.target)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  document.getElementById("village-settings").addEventListener("click", (e) => {
+    if (e.target.id === "ml-save") saveVillageSettings({ enabled: document.getElementById("ml-enabled").checked, dir: document.getElementById("ml-dir").value });
+    if (e.target.id === "ml-default") saveVillageSettings({ dir: villageDefaultDir });
+  });
+  document.getElementById("village-settings").addEventListener("keydown", (e) => {
+    if (e.target.id === "ml-dir" && e.key === "Enter") document.getElementById("ml-save").click();
   });
   document.getElementById("config-body").addEventListener("click", (e) => {
     const item = e.target.closest(".cfg-item:not(.cfg-static)");

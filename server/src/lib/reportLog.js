@@ -13,6 +13,19 @@ const path = require("path");
 let reportIndex = []; // ReportEntry[], in ascending `seq` order (== ingestion order)
 let nextSeq = 0;
 const offsets = new Map(); // absolute file path -> byte offset already parsed
+// taskId -> earliest ts seen: lets every report say when its context started
+// (docs/design/12-unread-reports-and-machine-log.md §3.3).
+const taskStarts = new Map();
+
+function noteTaskStart(entry) {
+  if (entry.taskId == null) return;
+  const prev = taskStarts.get(entry.taskId);
+  if (!prev || entry.ts < prev) taskStarts.set(entry.taskId, entry.ts);
+}
+
+function withTaskStart(entry) {
+  return { ...entry, taskStartedAt: entry.taskId != null ? taskStarts.get(entry.taskId) || null : null };
+}
 
 function agentIdFromFile(file) {
   return path.basename(file, ".ndjson");
@@ -69,9 +82,10 @@ function ingestFile(file) {
       taskId: parsed.taskId ?? null,
     };
     reportIndex.push(entry);
+    noteTaskStart(entry);
     added.push(entry);
   }
-  return added;
+  return added.map(withTaskStart);
 }
 
 // Full (re)build from disk — call once at server startup. Reads every
@@ -82,6 +96,7 @@ function loadAll(logsDir) {
   reportIndex = [];
   nextSeq = 0;
   offsets.clear();
+  taskStarts.clear();
   if (!fs.existsSync(logsDir)) return;
 
   const files = fs
@@ -116,6 +131,7 @@ function loadAll(logsDir) {
   parsed.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
   for (const entry of parsed) {
     reportIndex.push({ ...entry, seq: nextSeq++ });
+    noteTaskStart(entry);
   }
 }
 
@@ -145,7 +161,87 @@ function query({ agentId, levels, q, since, until, cursor, limit = 50 } = {}) {
   const page = matches.slice(sliceStart, sliceStart + limit);
   const nextCursor = sliceStart + limit < matches.length ? page[page.length - 1]?.seq ?? null : null;
 
-  return { reports: page, nextCursor, total: matches.length };
+  return { reports: page.map(withTaskStart), nextCursor, total: matches.length };
 }
 
-module.exports = { loadAll, ingestFile, query };
+// docs/design/12-unread-reports-and-machine-log.md §3 — one agent's reports
+// grouped by context (one subagent run == one taskId), newest context first,
+// reports inside a context oldest first. Lines written before taskIds were
+// recorded on permission waits (taskId null) are attached to the context
+// whose time span contains them; anything else becomes its own block.
+function contexts({ agentId, limit = 5, before } = {}) {
+  const entries = reportIndex
+    .filter((e) => e.agentId === agentId)
+    .sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.seq - b.seq));
+
+  const byTask = new Map();
+  const list = [];
+  for (const e of entries) {
+    if (e.taskId == null) continue;
+    let ctx = byTask.get(e.taskId);
+    if (!ctx) {
+      ctx = { taskId: e.taskId, startedAt: e.ts, endedAt: null, state: "unknown", reports: [] };
+      byTask.set(e.taskId, ctx);
+      list.push(ctx);
+    }
+    ctx.reports.push(e);
+    if (e.level === "result") ctx.endedAt = e.ts;
+  }
+  list.sort((a, b) => (a.startedAt < b.startedAt ? -1 : a.startedAt > b.startedAt ? 1 : 0));
+  list.forEach((ctx, i) => {
+    ctx.nextStart = list[i + 1] ? list[i + 1].startedAt : null;
+  });
+
+  for (const e of entries) {
+    if (e.taskId != null) continue;
+    let home = null;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const ctx = list[i];
+      if (!ctx.taskId || ctx.startedAt > e.ts) continue;
+      const end = ctx.endedAt || ctx.nextStart;
+      if (!end || e.ts <= end) home = ctx;
+      break;
+    }
+    if (home) {
+      home.reports.push(e);
+      home.reports.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.seq - b.seq));
+    } else {
+      list.push({ taskId: null, startedAt: e.ts, endedAt: null, state: "unknown", reports: [e] });
+    }
+  }
+
+  list.sort((a, b) => (a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : 0));
+  const newestTask = list.find((c) => c.taskId);
+  for (const ctx of list) {
+    if (!ctx.taskId) ctx.state = "unknown";
+    else if (ctx.endedAt) ctx.state = "done";
+    else ctx.state = ctx === newestTask ? "running" : "unknown";
+    delete ctx.nextStart;
+  }
+
+  const pool = before ? list.filter((c) => c.startedAt < before) : list;
+  const page = pool.slice(0, limit);
+  const nextBefore = pool.length > limit ? page[page.length - 1].startedAt : null;
+  return { contexts: page, nextBefore, total: list.length };
+}
+
+// docs/design/12 §4.2 — only results, warnings and errors count as unread.
+const UNREAD_LEVELS = new Set(["result", "warn", "error"]);
+
+// `marks`: { agentId: ts } — reports strictly newer than the mark are unread;
+// an agent with no mark has every counted report unread.
+function unreadCounts(marks = {}) {
+  const counts = {};
+  for (const e of reportIndex) {
+    if (!UNREAD_LEVELS.has(e.level)) continue;
+    const mark = marks[e.agentId];
+    if (typeof mark === "string" && mark && e.ts <= mark) continue;
+    const c = (counts[e.agentId] ||= { total: 0, error: 0, warn: 0, result: 0, latestTs: null });
+    c.total++;
+    c[e.level]++;
+    if (!c.latestTs || e.ts > c.latestTs) c.latestTs = e.ts;
+  }
+  return counts;
+}
+
+module.exports = { loadAll, ingestFile, query, contexts, unreadCounts, UNREAD_LEVELS };

@@ -1213,6 +1213,7 @@ body {
 }
 
 .row input[type="text"],
+#ml-dir,
 #reports-filter-bar select,
 #reports-filter-bar input[type="text"] {
   padding: 6px 8px;
@@ -1411,4 +1412,281 @@ select optgroup {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ---- unread reports (docs/design/12-unread-reports-and-machine-log.md §4.3) ---- */
+.agents-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.agents-head h2 {
+  margin: 0;
+}
+
+#unread-wrap {
+  position: relative;
+}
+
+.unread-badge {
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.unread-badge.has-unread {
+  border-color: var(--accent);
+  background: rgba(232, 163, 61, 0.16);
+  color: var(--text);
+}
+
+.unread-badge.has-error {
+  border-color: var(--danger);
+  background: rgba(196, 85, 61, 0.22);
+  color: var(--text);
+}
+
+.unread-badge b {
+  font-size: 13px;
+}
+
+.unread-badge.bump {
+  animation: unread-bump 0.5s ease-out 1;
+}
+
+@keyframes unread-bump {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .unread-badge.bump { animation: none; }
+}
+
+.unread-pop,
+.unread-toast {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  min-width: 240px;
+  max-width: 300px;
+  background: var(--wood-800);
+  border: 1px solid var(--wood-500);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+}
+
+.unread-pop {
+  padding: 6px;
+}
+
+.unread-pop ul {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.unread-pop .hint {
+  margin: 4px 6px;
+  color: var(--text-muted);
+}
+
+.unread-pop #unread-all-read {
+  width: 100%;
+}
+
+.unread-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.unread-row:hover {
+  background: var(--surface-hover);
+}
+
+.unread-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unread-kinds {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.unread-toast {
+  padding: 7px 10px;
+  color: var(--text);
+  border-left: 3px solid var(--done);
+  cursor: pointer;
+}
+
+.unread-toast.level-warn { border-left-color: var(--accent); }
+.unread-toast.level-error { border-left-color: var(--danger); }
+
+.count-badge {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--wood-900);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 17px;
+  text-align: center;
+  vertical-align: 1px;
+}
+
+.count-badge.error {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* ---- context blocks (docs/design/12 §3.3) ---- */
+.ctx-block {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px 2px;
+  margin-bottom: 8px;
+}
+
+.ctx-block.has-unread {
+  border-color: rgba(232, 163, 61, 0.45);
+}
+
+.ctx-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding-bottom: 3px;
+  margin-bottom: 4px;
+  border-bottom: 1px dashed rgba(224, 182, 126, 0.15);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.ctx-when {
+  color: var(--wood-100);
+  font-weight: 600;
+}
+
+.ctx-running {
+  color: var(--working);
+}
+
+.ctx-muted {
+  opacity: 0.8;
+}
+
+.ctx-unread {
+  margin-left: auto;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.ctx-block .log-entry.long {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.ctx-block .log-entry.long.expanded {
+  display: block;
+}
+
+.ctx-block .log-entry:last-child {
+  margin-bottom: 2px;
+}
+
+.unread-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-right: 4px;
+  vertical-align: 1px;
+}
+
+.log-entry.level-error .unread-dot {
+  background: var(--danger);
+}
+
+.ctx-more {
+  display: block;
+  margin: 4px auto 0;
+}
+
+#reports-list .ctx-head .report-agent {
+  margin-right: 0;
+}
+
+/* Editors moved under a fold so reports stay near the top (docs/design/12 §1). */
+.agent-edit {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}
+
+.agent-edit > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.agent-edit[open] > summary {
+  color: var(--wood-100);
+}
+
+/* ---- Agent Village settings card (docs/design/12 §5.2) ---- */
+.av-settings {
+  margin-bottom: 12px;
+}
+
+.av-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 6px 0;
+}
+
+.av-row .cfg-note {
+  margin: 0;
+}
+
+#ml-dir {
+  flex: 1 1 260px;
+  min-width: 0;
+  font-family: Consolas, "Courier New", monospace;
 }

@@ -26,6 +26,7 @@ const decorStore = require("./lib/decorStore");
 const reportLog = require("./lib/reportLog");
 const projectRegistry = require("./lib/projectRegistry");
 const { readConfigOverview } = require("./lib/configOverview");
+const villageSettings = require("./lib/villageSettings");
 
 // See docs/design/04-multi-project-integration.md for the install-root vs.
 // target-root split this implements.
@@ -463,6 +464,30 @@ app.get("/api/reports", (req, res) => {
   res.json(result);
 });
 
+// docs/design/12-unread-reports-and-machine-log.md §3.2 — one agent's reports grouped by context.
+app.get("/api/reports/contexts", (req, res) => {
+  const { agentId, limit, before } = req.query;
+  if (!agentId) return res.status(400).json({ error: "agentIdを指定してください" });
+  let limitNum = 5;
+  if (limit !== undefined) {
+    limitNum = Number(limit);
+    if (!Number.isInteger(limitNum) || limitNum <= 0) return res.status(400).json({ error: "limitは正の整数で指定してください" });
+    limitNum = Math.min(limitNum, 50);
+  }
+  res.json(reportLog.contexts({ agentId: String(agentId), limit: limitNum, before: before ? String(before) : undefined }));
+});
+
+// docs/design/12 §4.2 — unread counts against the browser's read marks.
+app.post("/api/reports/unread", (req, res) => {
+  const marks = req.body && req.body.marks;
+  if (marks !== undefined && (typeof marks !== "object" || marks === null || Array.isArray(marks))) {
+    return res.status(400).json({ error: "marksはオブジェクトで指定してください" });
+  }
+  const clean = {};
+  for (const [k, v] of Object.entries(marks || {})) if (typeof v === "string") clean[k] = v;
+  res.json({ counts: reportLog.unreadCounts(clean) });
+});
+
 // ---- agent rename -------------------------------------------------
 app.patch("/api/agents/:agentId/name", (req, res) => {
   const { agentId } = req.params;
@@ -752,6 +777,35 @@ app.get("/api/config", (req, res) => {
     res.json(readConfigOverview(TARGET_ROOT));
   } catch (err) {
     res.status(500).json({ error: `構成の読み込みに失敗しました: ${err.message}` });
+  }
+});
+
+// ---- Agent Village's own settings (docs/design/12-unread-reports-and-machine-log.md §5.2) ----------
+function villageSettingsBody() {
+  const settings = villageSettings.readSettings(TARGET_ROOT);
+  return {
+    settings,
+    resolvedMachineLogDir: villageSettings.resolveDir(TARGET_ROOT, settings.machineLog.dir),
+    defaultMachineLogDir: villageSettings.DEFAULT_MACHINE_LOG_DIR,
+    file: path.relative(TARGET_ROOT, villageSettings.settingsFile(TARGET_ROOT)).split(path.sep).join("/"),
+  };
+}
+
+app.get("/api/village-settings", (req, res) => {
+  res.json(villageSettingsBody());
+});
+
+app.put("/api/village-settings", (req, res) => {
+  const ml = req.body && req.body.machineLog;
+  if (!ml || typeof ml !== "object") return res.status(400).json({ error: "machineLogを指定してください" });
+  if (ml.enabled !== undefined && typeof ml.enabled !== "boolean") return res.status(400).json({ error: "enabledはtrue/falseで指定してください" });
+  if (ml.dir !== undefined && typeof ml.dir !== "string") return res.status(400).json({ error: "保存場所は文字列で指定してください" });
+  try {
+    const result = villageSettings.writeMachineLog(TARGET_ROOT, ml);
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json(villageSettingsBody());
+  } catch (err) {
+    res.status(500).json({ error: `設定を保存できませんでした: ${err.message}` });
   }
 });
 

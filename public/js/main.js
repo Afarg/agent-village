@@ -5,12 +5,14 @@ import { initReports } from "./reports.js";
 import { initAlerts } from "./alerts.js";
 import { initProjects } from "./projects.js";
 import { initConfig } from "./config.js";
+import { initUnread } from "./unread.js";
 
 async function bootstrap() {
   initHud();
   initAlerts();
   initProjects();
   initConfig();
+  await initUnread();
   await store.init();
   initReports();
   await initGame("game-container");

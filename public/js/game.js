@@ -4,6 +4,7 @@
 import { store, isDummyAgent } from "./store.js";
 import { C as DECOR_COLORS, PARTS, registerBuiltinParts } from "./decor/parts.js";
 import { resolveDecor } from "./decor/themes.js";
+import { unreadOf } from "./unread.js";
 
 const WALK_SPEED = 110; // logical px/sec
 const BUBBLE_MS = 3400;
@@ -404,6 +405,13 @@ class VillageScene extends Phaser.Scene {
       .setOrigin(0.5, 1)
       .setVisible(false);
 
+    // Unread-report mark (docs/design/12 §4.3): stays while the agent has
+    // unread results/warnings/errors; hidden while a bubble is up.
+    const mail = this.add
+      .text(size / 2 + 2, -size / 2 + 2, "✉", { fontFamily: FONT_STACK, fontSize: "11px", color: "#f5e9d3", stroke: "#2a1d14", strokeThickness: 3, resolution: TEXT_RESOLUTION })
+      .setOrigin(0.5, 1)
+      .setVisible(false);
+
     const bubbleTail = this.add.graphics().setVisible(false);
     const bubbleBg = this.add.graphics().setVisible(false);
     // useAdvancedWrap: plain wordWrap only breaks at spaces, so Japanese text
@@ -421,7 +429,7 @@ class VillageScene extends Phaser.Scene {
 
     const selectRing = this.add.ellipse(0, size * 0.45, size * 1.4, size * 0.55, 0xffffff, 0.28).setVisible(false);
 
-    container.add([selectRing, body, head, eye, sprite, nameText, bubbleTail, bubbleBg, bubbleText, emote]);
+    container.add([selectRing, body, head, eye, sprite, nameText, mail, bubbleTail, bubbleBg, bubbleText, emote]);
     for (const target of [body, head, sprite]) {
       target
         .setInteractive({ useHandCursor: true })
@@ -441,6 +449,7 @@ class VillageScene extends Phaser.Scene {
       nameBaseY,
       nameShift: { x: 0, y: 0 },
       emote,
+      mail,
       bubbleTail,
       bubbleBg,
       bubbleText,
@@ -467,6 +476,7 @@ class VillageScene extends Phaser.Scene {
     if (agent.animation) this.startIdleBlink(entry);
     else if (agent.spriteUrl) this.applyCharacterSprite(entry, agent.spriteUrl);
     if (agent.pendingPermission) this.showPermissionBubble(entry, agent.pendingPermission);
+    this.refreshMail(entry);
     return entry;
   }
 
@@ -846,6 +856,7 @@ class VillageScene extends Phaser.Scene {
     this.drawBubbleTail(entry);
     this.lastStackAt = -Infinity; // place it on the very next frame
 
+    this.refreshMail(entry);
     if (!persistent) {
       entry.bubbleTimer = this.time.delayedCall(BUBBLE_MS, () => {
         entry.bubbleTimer = null;
@@ -863,6 +874,13 @@ class VillageScene extends Phaser.Scene {
     entry.bubbleText.setVisible(false);
     entry.bubbleShift = { x: 0, y: 0 };
     this.drawBubbleTail(entry);
+    this.refreshMail(entry);
+  }
+
+  refreshMail(entry) {
+    const c = unreadOf(entry.agent.agentId);
+    entry.mail.setColor(c && c.error ? "#ff9a85" : "#f5e9d3");
+    entry.mail.setVisible(!!(c && c.total) && !entry.bubbleBg.visible);
   }
 
   showPermissionBubble(entry, pendingPermission) {
@@ -1041,6 +1059,8 @@ class VillageScene extends Phaser.Scene {
       for (const roomId of data.roomIds) this.redrawRoom(roomId);
     } else if (type === "decor-library") {
       this.syncCustomParts();
+    } else if (type === "unread-changed") {
+      for (const entry of this.characters.values()) this.refreshMail(entry);
     }
   }
 }
