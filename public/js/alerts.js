@@ -63,7 +63,8 @@ function renderSummary() {
     .filter(([s, , n]) => n > 0 || s === "working")
     .map(([s, label, n]) => `<span class="sum-count"><span class="status-dot status-${s}"></span>${label} <b>${n}</b></span>`);
   if (stale.length) {
-    counts.splice(1, 0, `<span class="sum-count sum-stale" title="作業中のまま長く更新がありません（${stale.map((a) => escapeHtml(a.displayName)).join("・")}）"><span class="status-dot status-stale"></span>応答なし？ <b>${stale.length}</b></span>`);
+    // Clicking opens the first one's detail, where the 対応のしかた box is (13 §6.1).
+    counts.splice(1, 0, `<button type="button" class="sum-count sum-stale" data-agent-id="${escapeHtml(stale[0].agentId)}" title="作業中のまま長く更新がありません（${stale.map((a) => escapeHtml(a.displayName)).join("・")}）。クリックで対応のしかたを表示"><span class="status-dot status-stale"></span>応答なし？ <b>${stale.length}</b></button>`);
   }
 
   el.innerHTML = [
@@ -72,7 +73,7 @@ function renderSummary() {
     ...counts,
   ].join("");
 
-  for (const btn of el.querySelectorAll(".sum-alert")) {
+  for (const btn of el.querySelectorAll(".sum-alert, .sum-stale")) {
     btn.addEventListener("click", () => focusAgent(btn.dataset.agentId));
   }
 

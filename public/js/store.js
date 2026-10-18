@@ -14,11 +14,34 @@ export function isDummyAgent(agent) {
 // file is never changed. Permission waits and dummies are never stale.
 const STALE_CHECK_MS = 10000;
 
-export function isStale(agent, now = Date.now()) {
+// Stale by the threshold alone, ignoring "まだ作業中" snoozes.
+export function isOverdue(agent, now = Date.now()) {
   if (!agent || isDummyAgent(agent) || agent.pendingPermission) return false;
   if (agent.status !== "working" && agent.status !== "assigned") return false;
   const t = Date.parse(agent.updatedAt);
   return Number.isFinite(t) && now - t >= store.staleAfterMs;
+}
+
+// §6.1: the user said "still working" for this run (this updatedAt).
+export function isSnoozed(agent, now = Date.now()) {
+  const z = agent && store.snoozes[agent.agentId];
+  if (!z || z.updatedAt !== agent.updatedAt) return false;
+  return z.until === null || now < z.until;
+}
+
+export function isStale(agent, now = Date.now()) {
+  return isOverdue(agent, now) && !isSnoozed(agent, now);
+}
+
+const SNOOZE_KEY = "agentVillage.staleSnooze";
+
+function readAllSnoozes() {
+  try {
+    const all = JSON.parse(localStorage.getItem(SNOOZE_KEY) || "{}");
+    return all && typeof all === "object" ? all : {};
+  } catch {
+    return {};
+  }
 }
 
 // "2時間" / "45分" since the last state write.
@@ -41,6 +64,42 @@ class Store {
     this.listeners = new Set();
     this.staleAfterMs = 60 * 60000;
     this.staleKey = "";
+    this.projectKey = "";
+    this.snoozes = {}; // agentId -> { updatedAt, until: ms | null (= this whole run) }
+  }
+
+  setProjectKey(key) {
+    this.projectKey = key;
+    this.loadSnoozes();
+    if (!this.snoozeListener) {
+      // Another tab snoozed (or a snooze ran out there): re-judge here too.
+      this.snoozeListener = (e) => {
+        if (e.key !== SNOOZE_KEY) return;
+        this.loadSnoozes();
+        this.checkStale(true);
+      };
+      window.addEventListener("storage", this.snoozeListener);
+    }
+  }
+
+  loadSnoozes() {
+    const mine = readAllSnoozes()[this.projectKey];
+    this.snoozes = mine && typeof mine === "object" ? mine : {};
+  }
+
+  // ms: snooze length, or null for "この作業では知らせない".
+  snoozeStale(agentId, ms) {
+    const agent = this.getAgent(agentId);
+    if (!agent) return;
+    this.snoozes[agentId] = { updatedAt: agent.updatedAt, until: ms === null ? null : Date.now() + ms };
+    try {
+      const all = readAllSnoozes();
+      all[this.projectKey] = this.snoozes;
+      localStorage.setItem(SNOOZE_KEY, JSON.stringify(all));
+    } catch {
+      // storage blocked — the snooze lasts for this page only
+    }
+    this.checkStale(true);
   }
 
   setStaleAfterMinutes(min) {

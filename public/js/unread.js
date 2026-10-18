@@ -250,6 +250,7 @@ export async function initUnread() {
   } catch {
     projectKey = "";
   }
+  store.setProjectKey(projectKey);
   loadMarks();
   await refreshCounts();
 

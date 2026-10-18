@@ -1215,6 +1215,7 @@ body {
 .row input[type="text"],
 #ml-dir,
 #stale-min,
+#sh-min,
 #reports-filter-bar select,
 #reports-filter-bar input[type="text"] {
   padding: 6px 8px;
@@ -1805,4 +1806,121 @@ select optgroup {
 
 #stale-min {
   width: 80px;
+}
+
+/* ---- 応答なし？ help box (docs/design/13 §6.1) ---- */
+.stale-help {
+  margin: 4px 0 12px;
+  padding: 8px 10px;
+  border: 1px dashed var(--text-muted);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 12px;
+}
+
+.sh-title {
+  font-weight: 600;
+  color: var(--wood-100);
+}
+
+.sh-lead {
+  margin: 2px 0 6px;
+  color: var(--text-muted);
+}
+
+.sh-steps {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.sh-steps > li {
+  margin-bottom: 8px;
+}
+
+.sh-steps ul {
+  margin: 4px 0 0;
+  padding-left: 14px;
+}
+
+.sh-steps .btn {
+  margin: 2px 4px 2px 0;
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.sh-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin-top: 4px;
+}
+
+#sh-min {
+  width: 70px;
+}
+
+.sh-confirm {
+  color: var(--accent);
+}
+
+.link-btn {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0 2px;
+}
+
+.sh-investigate > summary,
+.av-help > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.sh-inv-row {
+  display: flex;
+  gap: 6px;
+  margin: 3px 0;
+  word-break: break-all;
+}
+
+.sh-inv-label {
+  flex: 0 0 84px;
+  color: var(--text-muted);
+}
+
+.sh-inv-row code,
+.stale-help code {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11px;
+  color: var(--wood-100);
+}
+
+.snoozed {
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--text-muted);
+}
+
+button.sum-stale {
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.av-help {
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+.av-help ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
 }

@@ -259,6 +259,20 @@ function renderVillageSettings(body, msg = "", staleMsg = "") {
       <button class="btn" id="stale-default" type="button" ${body.settings.display.staleAfterMinutes === body.defaultStaleAfterMinutes ? "disabled" : ""}>既定（${body.defaultStaleAfterMinutes}分）に戻す</button>
     </div>
     <div class="cfg-note">フックが状態を書くのは、作業の開始・終了・許可待ちのときだけです。長い作業はずっと更新がないので、短くしすぎると動いている作業まで「応答なし？」になります。</div>
+    <details class="av-help">
+      <summary>どう決めればいい？ 出たときはどうする？</summary>
+      <ul>
+        <li><b>決め方</b>: 普段の作業がかかる時間より<b>少し長め</b>にします（例: 30分ほどの作業が多いなら 60分）。</li>
+        <li><b>出たとき</b>: そのエージェントの詳細パネルに「対応のしかた」が出ます。
+          <ol>
+            <li>Claude Code の画面を見る。まだ動いていれば「まだ作業中」で表示を止める。入力待ち・エラーなら Claude Code 側で対応する。</li>
+            <li>作業が終わっている・中断した（Esc・/clear・ターミナルを閉じた など）なら「待機中に戻す」。</li>
+            <li>長い作業でよく出るなら、ここの分数を長くする。</li>
+          </ol>
+        </li>
+        <li><b>調べたいとき</b>: 同じ欄の「調べるための情報」に、状態ファイル・履歴・機械用ログ・会話記録の場所が出ます。</li>
+      </ul>
+    </details>
     <div id="stale-msg">${staleMsg}</div>
   </section>`;
 }

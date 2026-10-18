@@ -1,4 +1,4 @@
-import { store, isDummyAgent, isStale, sinceLabel } from "./store.js";
+import { store, isDummyAgent, isStale, isOverdue, isSnoozed, sinceLabel } from "./store.js";
 import { PARTS, builtinPartDataUrl } from "./decor/parts.js";
 import { resolveDecor } from "./decor/themes.js";
 import { contextBlockHtml, tickContextElapsed } from "./contexts.js";
@@ -223,7 +223,7 @@ function agentRowHtml(a) {
   const expanded = !!pp && expandedPermissionRows.has(a.agentId);
   const statusHtml = isStale(a)
     ? `<span class="status-label stale" title="${escapeHtml(staleHint(a))}"><span class="status-dot status-stale"></span> 応答なし？（${sinceLabel(a.updatedAt)}）</span>`
-    : `<span class="status-label"><span class="status-dot status-${a.status}"></span> ${STATUS_LABEL[a.status] || a.status}</span>`;
+    : `<span class="status-label"><span class="status-dot status-${a.status}"></span> ${STATUS_LABEL[a.status] || a.status}${isOverdue(a) && isSnoozed(a) ? ' <span class="snoozed" title="「まだ作業中」として応答なし？の表示を止めています">確認済み</span>' : ""}</span>`;
   return `
       <li class="list-item ${a.agentId === store.selectedAgentId ? "selected" : ""}" data-agent-id="${a.agentId}">
         <span class="thumb" style="${thumbStyle}"></span>
@@ -541,6 +541,160 @@ async function loadAgentContexts(agentId, { reset, keepCount = false } = {}) {
   redrawAgentContexts();
 }
 
+// ------------------------------------------ 応答なし？ help (13 §6.1) ---
+// What to check and do when an agent shows 応答なし？, right where it shows.
+// The panel is rebuilt on every store event, so the two-step reset confirm,
+// the last message and the fetched investigation paths live here.
+const SNOOZE_HOUR_MS = 60 * 60000;
+let staleConfirmFor = null; // agentId whose "待機中に戻す" asks for confirmation
+let staleMsg = { agentId: null, html: "" };
+const investigateCache = new Map(); // `${agentId}|${updatedAt}` -> data | "loading" | { error }
+
+function fmtStamp(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function investigateHtml(agent) {
+  const v = investigateCache.get(`${agent.agentId}|${agent.updatedAt}`);
+  if (!v || v === "loading") return '<p class="hint">読み込み中…</p>';
+  if (v.error) return `<p class="hint">読み込めませんでした: ${escapeHtml(v.error)}</p>`;
+  const row = (label, val, note = "") =>
+    `<div class="sh-inv-row"><span class="sh-inv-label">${label}</span>${val ? `<code>${escapeHtml(val)}</code>` : `<span class="hint">${note || "なし"}</span>`}</div>`;
+  return [
+    row("作業 ID", v.taskId),
+    row("状態ファイル", v.stateFile),
+    row("人が読む履歴", v.humanLog),
+    row("機械用ログ", v.machineLogLatest || (v.machineLogEnabled ? "" : ""), v.machineLogEnabled ? `まだありません（${v.machineLogDir}）` : "記録がオフです（構成画面で設定）"),
+    row("会話記録", v.transcriptPath, "機械用ログに記録がありません"),
+    '<div class="cfg-note">場所だけを表示しています。中身はエディタや <code>jq</code> などで開いてください。</div>',
+  ].join("");
+}
+
+async function loadInvestigate(agent) {
+  const key = `${agent.agentId}|${agent.updatedAt}`;
+  if (investigateCache.has(key)) return;
+  investigateCache.set(key, "loading");
+  try {
+    const res = await fetch(`/api/agents/${encodeURIComponent(agent.agentId)}/investigate`);
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    investigateCache.set(key, body);
+  } catch (err) {
+    investigateCache.set(key, { error: err.message });
+  }
+  const el = document.getElementById("sh-investigate-body");
+  if (el && store.selectedAgentId === agent.agentId) el.innerHTML = investigateHtml(agent);
+}
+
+function staleHelpHtml(agent) {
+  const confirming = staleConfirmFor === agent.agentId;
+  const msg = staleMsg.agentId === agent.agentId ? staleMsg.html : "";
+  return `<section class="stale-help" id="stale-help">
+    <div class="sh-title">⏸ 応答なし？ — 最終更新から ${sinceLabel(agent.updatedAt)}（${escapeHtml(fmtStamp(agent.updatedAt))}）</div>
+    <p class="sh-lead">終了の記録が届いていません。次の順に確かめてください。</p>
+    <ol class="sh-steps">
+      <li><b>Claude Code の画面を見る</b>
+        <ul>
+          <li>まだ動いている（長い作業）→
+            <button class="btn" type="button" id="sh-snooze-hour">まだ作業中: 1時間後に再確認</button>
+            <button class="btn" type="button" id="sh-snooze-task">この作業では知らせない</button></li>
+          <li>入力待ち・エラーで止まっている → Claude Code 側で対応してください（ここからは操作できません）</li>
+        </ul>
+      </li>
+      <li><b>作業が終わっている／中断した</b>（Esc で止めた・/clear した・ターミナルを閉じた など）→
+        ${
+          confirming
+            ? `<span class="sh-confirm">本当に戻しますか？ <button class="btn btn-danger" type="button" id="sh-reset-yes">戻す</button> <button class="btn" type="button" id="sh-reset-no">やめる</button></span>`
+            : `<button class="btn" type="button" id="sh-reset">待機中に戻す</button>`
+        }
+        <div class="cfg-note">状態ファイルを「待機中」に書き換え、報告履歴と機械用ログに記録を残します。</div>
+      </li>
+      <li><b>長い作業でよく出る</b> → しきい値を長くする
+        <div class="sh-row">最終更新から <input type="number" id="sh-min" min="1" max="1440" step="1" value="${Math.round(store.staleAfterMs / 60000)}" aria-label="応答なし？にするまでの分数" /> 分で表示
+          <button class="btn" type="button" id="sh-min-save">保存</button>
+          <button class="link-btn" type="button" id="sh-open-config">構成画面で設定 ›</button></div>
+      </li>
+    </ol>
+    <div id="sh-msg">${msg}</div>
+    <details class="sh-investigate" id="sh-investigate"${investigateOpen ? " open" : ""}>
+      <summary>調べるための情報（作業 ID・機械用ログ・会話記録の場所）</summary>
+      <div id="sh-investigate-body">${investigateHtml(agent)}</div>
+    </details>
+  </section>`;
+}
+
+let investigateOpen = false;
+
+function setStaleMsg(agentId, html) {
+  staleMsg = { agentId, html };
+  const el = document.getElementById("sh-msg");
+  if (el) el.innerHTML = html;
+}
+
+// Brings up 構成 and puts the cursor in its threshold field.
+export function openStaleSettings() {
+  document.querySelector('#view-switcher .tab-btn[data-view="config"]')?.click();
+  let tries = 0;
+  const t = setInterval(() => {
+    const input = document.getElementById("stale-min");
+    if (input || ++tries > 50) {
+      clearInterval(t);
+      if (input) {
+        document.getElementById("cfg-village")?.scrollIntoView({ block: "start" });
+        input.focus();
+      }
+    }
+  }, 100);
+}
+
+function attachStaleHelpHandlers(agent) {
+  const id = agent.agentId;
+  const on = (elId, fn) => document.getElementById(elId)?.addEventListener("click", fn);
+  on("sh-snooze-hour", () => store.snoozeStale(id, SNOOZE_HOUR_MS));
+  on("sh-snooze-task", () => store.snoozeStale(id, null));
+  on("sh-reset", () => {
+    staleConfirmFor = id;
+    renderAgentDetail();
+  });
+  on("sh-reset-no", () => {
+    staleConfirmFor = null;
+    renderAgentDetail();
+  });
+  on("sh-reset-yes", async () => {
+    staleConfirmFor = null;
+    try {
+      await postJson(`/api/agents/${encodeURIComponent(id)}/reset-idle`, {});
+      setStaleMsg(id, "");
+    } catch (err) {
+      setStaleMsg(id, `<div class="appearance-error">${escapeHtml(err.message)}</div>`);
+      renderAgentDetail();
+    }
+  });
+  on("sh-min-save", async () => {
+    const n = Number(document.getElementById("sh-min").value);
+    if (!Number.isInteger(n) || n < 1 || n > 1440) {
+      setStaleMsg(id, `<div class="appearance-error">1〜1440 の整数で入力してください</div>`);
+      return;
+    }
+    try {
+      const res = await fetch("/api/village-settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ display: { staleAfterMinutes: n } }) });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      store.setStaleAfterMinutes(body.settings.display.staleAfterMinutes);
+      setStaleMsg(id, `<div class="appearance-success">✓ ${n}分に変更しました</div>`);
+    } catch (err) {
+      setStaleMsg(id, `<div class="appearance-error">${escapeHtml(err.message)}</div>`);
+    }
+  });
+  on("sh-open-config", openStaleSettings);
+  document.getElementById("sh-investigate")?.addEventListener("toggle", (e) => {
+    investigateOpen = e.target.open;
+    if (investigateOpen) loadInvestigate(agent);
+  });
+  if (investigateOpen) loadInvestigate(agent);
+}
+
 function renderAgentDetail() {
   const panel = document.getElementById("agent-detail-panel");
   const agent = store.selectedAgentId ? store.getAgent(store.selectedAgentId) : null;
@@ -565,7 +719,7 @@ function renderAgentDetail() {
       ${escapeHtml(agent.roomLabel)} ・ ${isStale(agent) ? `応答なし？（${sinceLabel(agent.updatedAt)}）` : STATUS_LABEL[agent.status] || agent.status}
       ${agent.model ? ` ・ ${escapeHtml(agent.model)} ${"★".repeat(agent.modelStars || 0)}` : ""}
     </div>
-    ${isStale(agent) ? `<div class="meta stale-note">⏸ ${escapeHtml(staleHint(agent))}</div>` : ""}
+    ${isStale(agent) ? staleHelpHtml(agent) : ""}
     <div class="description">${escapeHtml(agent.description || "(説明なし)")}</div>
     ${toolsHtml ? `<div class="tools">${toolsHtml}</div>` : ""}
     ${agent.task ? `<div class="meta">現在のタスク: ${escapeHtml(agent.task.title)}</div>` : ""}
@@ -594,6 +748,7 @@ function renderAgentDetail() {
   attachAgentRenameHandlers(agent.agentId);
   attachAgentAppearanceHandlers(agent.agentId);
   attachAgentAnimationHandlers(agent.agentId);
+  if (isStale(agent)) attachStaleHelpHandlers(agent);
   panel.scrollTop = scrollTop;
 }
 

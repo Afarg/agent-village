@@ -488,6 +488,96 @@ app.post("/api/reports/unread", (req, res) => {
   res.json({ counts: reportLog.unreadCounts(clean) });
 });
 
+// ---- 応答なし？ help (docs/design/13-room-groups-and-stale.md §6) -------------------------------------------------
+function readStateFile(agentId) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(AGENTS_STATE_DIR, `${agentId}.json`), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+// The user saw 応答なし？ and confirmed the run is over: put the agent back to
+// idle and leave a trace in both logs (the hook would have written the stop).
+app.post("/api/agents/:agentId/reset-idle", (req, res) => {
+  const { agentId } = req.params;
+  if (!defs[agentId]) return res.status(404).json({ error: `未知のエージェントです: ${agentId}` });
+  const cur = readStateFile(agentId);
+  if (!cur || !["working", "assigned"].includes(cur.status)) return res.status(409).json({ error: "このエージェントは作業中ではありません" });
+  const now = new Date().toISOString();
+  const taskId = (cur.task && cur.task.taskId) || null;
+  try {
+    const file = path.join(AGENTS_STATE_DIR, `${agentId}.json`);
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ schemaVersion: 1, agentId, status: "idle", updatedAt: now, task: null, log: [], result: null }, null, 2), "utf8");
+    fs.renameSync(tmp, file);
+    fs.mkdirSync(AGENTS_LOGS_DIR, { recursive: true });
+    fs.appendFileSync(path.join(AGENTS_LOGS_DIR, `${agentId}.ndjson`), JSON.stringify({ ts: now, level: "info", text: "手動で待機中に戻しました（応答なし？から）", agentId, taskId }) + "\n", "utf8");
+  } catch (err) {
+    return res.status(500).json({ error: `状態を書き換えられませんでした: ${err.message}` });
+  }
+  try {
+    const settings = villageSettings.readSettings(TARGET_ROOT);
+    if (settings.machineLog.enabled) {
+      const mfile = villageSettings.machineLogFile(TARGET_ROOT, agentId, settings);
+      fs.mkdirSync(path.dirname(mfile), { recursive: true });
+      const startedMs = Date.parse(cur.task && cur.task.startedAt);
+      fs.appendFileSync(
+        mfile,
+        JSON.stringify({
+          v: 1, ts: now, event: "reset", agentId, agentType: agentId, taskId, sessionId: null, project: path.resolve(TARGET_ROOT), cwd: null,
+          permissionMode: null, transcriptPath: null, tool: null, message: "手動で待機中に戻しました（応答なし？から）",
+          durationMs: Number.isFinite(startedMs) ? Date.parse(now) - startedMs : null,
+        }) + "\n",
+        "utf8"
+      );
+    }
+  } catch (err) {
+    console.warn(`[reset-idle] machine log write failed: ${err.message}`);
+  }
+  res.json({ ok: true });
+});
+
+// Where to look on the PC — paths only, never file contents.
+app.get("/api/agents/:agentId/investigate", (req, res) => {
+  const { agentId } = req.params;
+  if (!defs[agentId]) return res.status(404).json({ error: `未知のエージェントです: ${agentId}` });
+  const cur = readStateFile(agentId) || {};
+  const settings = villageSettings.readSettings(TARGET_ROOT);
+  const mdir = path.join(villageSettings.resolveDir(TARGET_ROOT, settings.machineLog.dir), agentId);
+  let latest = null;
+  let transcriptPath = null;
+  try {
+    const files = fs.readdirSync(mdir).filter((f) => /^\d{4}-\d{2}-\d{2}\.ndjson$/.test(f)).sort();
+    if (files.length) {
+      latest = path.join(mdir, files[files.length - 1]);
+      const lines = fs.readFileSync(latest, "utf8").split("\n").filter(Boolean).reverse();
+      for (const line of lines) {
+        try {
+          const e = JSON.parse(line);
+          if (typeof e.transcriptPath === "string" && e.transcriptPath) {
+            transcriptPath = e.transcriptPath;
+            break;
+          }
+        } catch {}
+      }
+    }
+  } catch {
+    // no machine log yet for this agent
+  }
+  res.json({
+    agentId,
+    taskId: (cur.task && cur.task.taskId) || null,
+    updatedAt: cur.updatedAt || null,
+    stateFile: path.join(AGENTS_STATE_DIR, `${agentId}.json`),
+    humanLog: path.join(AGENTS_LOGS_DIR, `${agentId}.ndjson`),
+    machineLogEnabled: settings.machineLog.enabled,
+    machineLogDir: mdir,
+    machineLogLatest: latest,
+    transcriptPath,
+  });
+});
+
 // ---- agent rename -------------------------------------------------
 app.patch("/api/agents/:agentId/name", (req, res) => {
   const { agentId } = req.params;
