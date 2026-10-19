@@ -175,6 +175,33 @@ body {
   color: var(--accent);
 }
 
+/* ---- office layout + full screen (docs/design/14-desktop-layout.md §6) ---- */
+#layout-controls {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+#layout-select {
+  font-size: 12px;
+  padding: 5px 4px;
+  border-radius: 6px;
+  border: 1px solid var(--wood-300);
+  background: rgba(192, 138, 79, 0.18);
+  color: var(--text);
+  font-family: inherit;
+}
+
+#game-container:fullscreen {
+  background: #1e140d;
+  overflow: hidden;
+}
+
+#game-container:fullscreen canvas {
+  border: 0;
+  box-shadow: none;
+}
+
 /* ---- project switcher (docs/design/11-project-switcher.md §6) ---- */
 #project-switcher {
   position: relative;
@@ -1184,6 +1211,23 @@ body {
   background: var(--surface);
   border: 1px dashed var(--line);
   border-radius: 8px;
+}
+
+.tile-layout + .tile-layout {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.tile-layout-head {
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.tile-layout .appearance-preview {
+  width: 56px;
+  height: 32px;
+  flex: 0 0 auto;
 }
 
 .appearance-preview {

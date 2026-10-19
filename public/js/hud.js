@@ -3,6 +3,7 @@ import { PARTS, builtinPartDataUrl } from "./decor/parts.js";
 import { resolveDecor } from "./decor/themes.js";
 import { contextBlockHtml, tickContextElapsed } from "./contexts.js";
 import { unreadOf, isShownUnread, closedAgent, projectKeyOf } from "./unread.js";
+import { currentLayout } from "./layout.js";
 
 const STATUS_LABEL = {
   idle: "待機中",
@@ -756,8 +757,8 @@ function renderAgentDetail() {
 function allRooms() {
   if (!store.rooms) return [];
   return [
-    { id: store.rooms.breakRoom.id, label: store.rooms.breakRoom.label, tileUrl: store.rooms.breakRoom.tileUrl, isBreak: true },
-    ...store.rooms.rooms.map((r) => ({ id: r.id, label: r.label, tileUrl: r.tileUrl, keywords: r.keywords, isBreak: false })),
+    { id: store.rooms.breakRoom.id, label: store.rooms.breakRoom.label, tileUrl: store.rooms.breakRoom.tileUrl, tileUrls: store.rooms.breakRoom.tileUrls, isBreak: true },
+    ...store.rooms.rooms.map((r) => ({ id: r.id, label: r.label, tileUrl: r.tileUrl, tileUrls: r.tileUrls, keywords: r.keywords, isBreak: false })),
   ];
 }
 
@@ -871,33 +872,54 @@ function attachRoomDeleteHandlers(roomId) {
   });
 }
 
+// One whole-room image per office layout (docs/design/14-desktop-layout.md §4):
+// the mobile (square) and desktop (wide) cells have different proportions.
+const TILE_LAYOUTS = [
+  { layout: "wide", label: "デスクトップ用（横長）" },
+  { layout: "square", label: "モバイル用（正方形）" },
+];
+
 function roomAppearanceEditorHtml(room) {
   const c = store.rooms?.constraints?.roomTile;
+  const urls = room.tileUrls || { [currentLayout]: room.tileUrl };
+  const rows = TILE_LAYOUTS.map(({ layout, label }) => {
+    const url = urls[layout];
+    const rec = c?.recommendedByLayout?.[layout];
+    const previewStyle = url ? `background-image:url('${url}')` : `background-color:var(--plaster)`;
+    return `
+      <div class="tile-layout" data-layout="${layout}">
+        <div class="tile-layout-head">${label}${layout === currentLayout ? ' <span class="chip">表示中</span>' : ""}${rec ? ` ・ 推奨 ${rec.w}×${rec.h}px` : ""}</div>
+        <div class="row">
+          <div class="appearance-preview tile-preview-${layout}" style="${previewStyle}"></div>
+          <input type="file" class="room-tile-file" accept="image/png" />
+          <button class="btn room-tile-upload-btn" type="button">差し替える</button>
+          ${url ? '<button class="btn btn-danger room-tile-reset-btn" type="button">外す</button>' : ""}
+        </div>
+        <div class="room-tile-msg"></div>
+      </div>`;
+  }).join("");
   const notes = c
-    ? `PNG形式・${c.minSize}〜${c.maxSize}px・${fmtKB(c.maxBytes)}以下。部屋のマス目と同じ比率（推奨 ${c.recommended.w}×${c.recommended.h}px）でないと引き伸ばされて表示されます。`
+    ? `PNG形式・${c.minSize}〜${c.maxSize}px・${fmtKB(c.maxBytes)}以下。推奨サイズと比率が違うと引き伸ばされます。画像がない配置では、内装の部品で組み立てた部屋を表示します（もう一方の画像は使いません）。`
     : "";
-
-  const previewStyle = room.tileUrl ? `background-image:url('${room.tileUrl}')` : `background-color:var(--plaster)`;
 
   return `
     <div class="appearance-editor">
-      <div class="appearance-preview" style="${previewStyle}"></div>
-      <div class="row">
-        <input type="file" id="room-tile-file" accept="image/png" />
-        <button class="btn" id="room-tile-upload-btn" type="button">差し替える</button>
-        ${room.tileUrl ? `<button class="btn btn-danger" id="room-tile-reset-btn" type="button">初期の見た目に戻す</button>` : ""}
-      </div>
+      ${rows}
       <div class="appearance-notes">${notes}</div>
-      <div id="room-tile-msg"></div>
     </div>
   `;
 }
 
 function attachRoomAppearanceHandlers(roomId) {
-  const fileInput = document.getElementById("room-tile-file");
-  const uploadBtn = document.getElementById("room-tile-upload-btn");
-  const resetBtn = document.getElementById("room-tile-reset-btn");
-  const msgEl = document.getElementById("room-tile-msg");
+  document.querySelectorAll("#room-detail-panel .tile-layout").forEach((box) => attachRoomTileHandlers(roomId, box));
+}
+
+function attachRoomTileHandlers(roomId, box) {
+  const { layout } = box.dataset;
+  const fileInput = box.querySelector(".room-tile-file");
+  const uploadBtn = box.querySelector(".room-tile-upload-btn");
+  const resetBtn = box.querySelector(".room-tile-reset-btn");
+  const msgEl = box.querySelector(".room-tile-msg");
   if (!uploadBtn) return;
 
   uploadBtn.addEventListener("click", async () => {
@@ -909,7 +931,7 @@ function attachRoomAppearanceHandlers(roomId) {
     uploadBtn.disabled = true;
     msgEl.innerHTML = `<div class="appearance-notes">アップロード中…</div>`;
     try {
-      await postFile(`/api/rooms/${roomId}/tile`, "tile", file);
+      await postFile(`/api/rooms/${roomId}/tile?layout=${layout}`, "tile", file);
       msgEl.innerHTML = `<div class="appearance-success">✓ 差し替えました</div>`;
     } catch (err) {
       msgEl.innerHTML = `<div class="appearance-error">${escapeHtml(err.message)}</div>`;
@@ -922,8 +944,8 @@ function attachRoomAppearanceHandlers(roomId) {
     resetBtn.addEventListener("click", async () => {
       resetBtn.disabled = true;
       try {
-        await deleteAsset(`/api/rooms/${roomId}/tile`);
-        msgEl.innerHTML = `<div class="appearance-success">✓ 初期の見た目に戻しました</div>`;
+        await deleteAsset(`/api/rooms/${roomId}/tile?layout=${layout}`);
+        msgEl.innerHTML = `<div class="appearance-success">✓ 画像を外しました</div>`;
       } catch (err) {
         msgEl.innerHTML = `<div class="appearance-error">${escapeHtml(err.message)}</div>`;
       } finally {
@@ -943,8 +965,8 @@ const DECOR_ROW_LABEL = {
   wall1: "壁飾り（左）",
   wall2: "壁飾り（中央）",
   wall3: "壁飾り（右）",
-  desk: "机（4台共通）",
-  chair: "椅子（4台共通）",
+  desk: "机（全台共通）",
+  chair: "椅子（全台共通）",
   side1: "脇置き（左）",
   side2: "脇置き（右）",
 };

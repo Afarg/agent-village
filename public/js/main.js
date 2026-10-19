@@ -6,8 +6,10 @@ import { initAlerts } from "./alerts.js";
 import { initProjects } from "./projects.js";
 import { initConfig } from "./config.js";
 import { initUnread } from "./unread.js";
+import { initLayoutControls } from "./layout.js";
 
 async function bootstrap() {
+  initLayoutControls();
   initHud();
   initAlerts();
   initProjects();

@@ -5,6 +5,7 @@ import { store, isDummyAgent, isStale } from "./store.js";
 import { C as DECOR_COLORS, PARTS, registerBuiltinParts } from "./decor/parts.js";
 import { resolveDecor } from "./decor/themes.js";
 import { unreadOf } from "./unread.js";
+import { isFullscreen } from "./layout.js";
 
 const WALK_SPEED = 110; // logical px/sec
 const BUBBLE_MS = 3400;
@@ -360,7 +361,9 @@ class VillageScene extends Phaser.Scene {
   roomTargetFor(agent) {
     const roomId = agent.roomId || "generic";
     const room = this.roomsConfig.rooms.find((r) => r.id === roomId);
-    const spots = room ? room.workSpots : [agent.deskSpot || this.roomsConfig.genericDesk.deskSpot];
+    // agent.deskSpot comes from the server's square layout; the generic desk
+    // of the layout actually drawn is the one to use.
+    const spots = room ? room.workSpots : [this.roomsConfig.genericDesk.deskSpot];
 
     if (!this.deskSlotIndex.has(roomId)) this.deskSlotIndex.set(roomId, new Map());
     const slots = this.deskSlotIndex.get(roomId);
@@ -802,7 +805,13 @@ class VillageScene extends Phaser.Scene {
     this.setIdleAnim(entry, on);
   }
 
+  // A new walk replaces one still in progress (stopped, so its arrival
+  // callback never runs): status can change again before a character arrives.
   walkTo(entry, target, onComplete) {
+    if (entry.moveTween) {
+      entry.moveTween.stop();
+      entry.moveTween = null;
+    }
     this.setWorkingAnim(entry, false);
     this.setIdleAnim(entry, false);
     const dx = target.x - entry.container.x;
@@ -818,13 +827,14 @@ class VillageScene extends Phaser.Scene {
       this.startWalkFrames(entry, facing);
     }
 
-    this.tweens.add({
+    entry.moveTween = this.tweens.add({
       targets: entry.container,
       x: target.x,
       y: target.y,
       duration: Math.max(220, (dist / WALK_SPEED) * 1000),
       ease: "Linear",
       onComplete: () => {
+        entry.moveTween = null;
         if (entry.agent.animation) {
           entry.isWalking = false;
           this.stopWalkFrames(entry);
@@ -916,13 +926,19 @@ class VillageScene extends Phaser.Scene {
   }
 
   // -------------------------------------------------------- transitions ---
+  // Delayed steps (the "!" / "✓" pauses) are dropped when another status
+  // change arrives first, and a character still walking is always re-routed,
+  // since entry.roomId only changes on arrival.
   handleStatusChange(entry, prevStatus, nextAgent) {
     const status = nextAgent.status;
+    const seq = (entry.statusSeq = (entry.statusSeq || 0) + 1);
+    const current = () => entry.statusSeq === seq;
 
     if (status === "assigned" || (status === "working" && prevStatus !== "working")) {
       this.showEmote(entry, "!");
       this.time.delayedCall(650, () => {
-        if (entry.roomId !== nextAgent.roomId) {
+        if (!current()) return;
+        if (entry.roomId !== nextAgent.roomId || entry.moveTween) {
           this.walkTo(entry, this.roomTargetFor(nextAgent), () => {
             entry.roomId = nextAgent.roomId;
             this.setWorkingAnim(entry, status === "working");
@@ -937,13 +953,14 @@ class VillageScene extends Phaser.Scene {
       this.showEmote(entry, "✓");
       this.tweens.add({ targets: entry.container, scale: 1.25, duration: 250, yoyo: true, ease: "Sine.easeOut" });
       this.time.delayedCall(900, () => {
+        if (!current()) return;
         this.walkTo(entry, this.breakSpotFor(entry.agent.agentId), () => {
           entry.roomId = "break";
           this.setWorkingAnim(entry, false);
         });
       });
     } else if (status === "idle") {
-      if (entry.roomId !== "break") {
+      if (entry.roomId !== "break" || entry.moveTween) {
         this.walkTo(entry, this.breakSpotFor(entry.agent.agentId), () => {
           entry.roomId = "break";
           this.setWorkingAnim(entry, false);
@@ -1086,10 +1103,14 @@ class VillageScene extends Phaser.Scene {
   }
 }
 
+// In full screen (docs/design/14-desktop-layout.md §6.2) the office is
+// scaled to fill the screen even by a fractional factor (1236x696 -> about
+// 1.55x on 1920x1080); otherwise whole steps are kept for crisp pixels.
 function computeZoom(canvas, containerEl) {
   const maxW = containerEl.clientWidth || canvas.width;
   const maxH = containerEl.clientHeight || canvas.height;
   const fit = Math.min(maxW / canvas.width, maxH / canvas.height);
+  if (isFullscreen()) return fit;
   // Integer zoom when the office fits; on smaller windows shrink fractionally
   // instead of overflowing (the 240x224 office cells need ~750x700px at 1x).
   if (fit >= 1) return Math.min(4, Math.floor(fit));
@@ -1117,10 +1138,13 @@ export async function initGame(containerId) {
   // `?debug` exposes the scene for automated layout checks (positions/depths).
   if (new URLSearchParams(window.location.search).has("debug")) window.__villageScene = scene;
 
-  window.addEventListener("resize", () => {
+  const rezoom = () => {
     const newZoom = computeZoom(roomsConfig.canvas, containerEl);
     if (game.scale && typeof game.scale.setZoom === "function") game.scale.setZoom(newZoom);
-  });
+  };
+  window.addEventListener("resize", rezoom);
+  // the container's size settles a frame after the switch
+  document.addEventListener("fullscreenchange", () => requestAnimationFrame(rezoom));
 
   return game;
 }

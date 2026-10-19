@@ -22,6 +22,7 @@ const {
 } = require("./lib/customAssets");
 const { renameAgentFile } = require("./lib/renameAgent");
 const roomsStore = require("./lib/roomsStore");
+const { LAYOUTS } = require("./lib/layout");
 const decorStore = require("./lib/decorStore");
 const reportLog = require("./lib/reportLog");
 const projectRegistry = require("./lib/projectRegistry");
@@ -93,9 +94,27 @@ function characterAnimation(agentId) {
   return animationInfo(CHARACTER_ASSET_DIR, agentId, "/assets/custom/characters");
 }
 
-function roomTile(roomId) {
-  return assetInfo(ROOM_ASSET_DIR, roomId, "/assets/custom/rooms");
+// Whole-room images are per layout (docs/design/14-desktop-layout.md §4):
+// the square (mobile) one keeps its original place, the wide (desktop) one
+// lives in rooms/wide/ — the two aspect ratios never share an image.
+function roomTileDir(layout) {
+  return layout === "wide" ? path.join(ROOM_ASSET_DIR, "wide") : ROOM_ASSET_DIR;
 }
+
+function roomTile(roomId, layout = "square") {
+  return assetInfo(roomTileDir(layout), roomId, layout === "wide" ? "/assets/custom/rooms/wide" : "/assets/custom/rooms");
+}
+
+// The image covers the room below its name-plate band.
+const ROOM_TILE_RECOMMENDED = { square: { w: 240, h: 208 }, wide: { w: 404, h: 208 } };
+
+// ?layout= on room endpoints; missing -> "square", unknown -> null.
+function parseLayout(value) {
+  if (value === undefined || value === "") return "square";
+  return LAYOUTS.includes(String(value)) ? String(value) : null;
+}
+
+const badLayout = (res, value) => res.status(400).json({ error: `未知のlayoutです: ${value}（square か wide）` });
 
 function buildCharacterWithAssets(def, computedRooms) {
   const character = buildAgentCharacter(def, states[def.agentId], computedRooms);
@@ -112,16 +131,24 @@ function snapshotAgents() {
   return Object.values(defs).map((def) => buildCharacterWithAssets(def, computed));
 }
 
-function roomsWithAssets() {
-  const computed = roomsStore.getComputed();
-  const withTile = (room) => ({ ...room, tileUrl: (roomTile(room.id) || {}).url || null });
+function roomsWithAssets(layout = "square") {
+  const computed = roomsStore.getComputed(layout);
+  const withTile = (room) => {
+    const tileUrls = { square: (roomTile(room.id, "square") || {}).url || null, wide: (roomTile(room.id, "wide") || {}).url || null };
+    return { ...room, tileUrl: tileUrls[computed.layout], tileUrls };
+  };
   return {
+    layout: computed.layout,
     canvas: computed.canvas,
     metrics: computed.metrics,
     breakRoom: withTile(computed.breakRoom),
     rooms: computed.rooms.map(withTile),
     genericDesk: computed.genericDesk,
-    constraints: { characterSprite: CHARACTER_SPRITE, roomTile: ROOM_TILE, characterAnimation: CHARACTER_ANIMATION },
+    constraints: {
+      characterSprite: CHARACTER_SPRITE,
+      roomTile: { ...ROOM_TILE, recommended: ROOM_TILE_RECOMMENDED[computed.layout], recommendedByLayout: ROOM_TILE_RECOMMENDED },
+      characterAnimation: CHARACTER_ANIMATION,
+    },
   };
 }
 
@@ -405,7 +432,9 @@ app.get("/api/snapshot", (req, res) => {
 });
 
 app.get("/api/rooms", (req, res) => {
-  res.json(roomsWithAssets());
+  const layout = parseLayout(req.query.layout);
+  if (!layout) return badLayout(res, req.query.layout);
+  res.json(roomsWithAssets(layout));
 });
 
 app.get("/api/events", (req, res) => {
@@ -765,6 +794,7 @@ app.delete("/api/rooms/:roomId", (req, res) => {
   if (!ok) return res.status(404).json({ error: `未知の部屋です: ${roomId}` });
 
   removeAsset(ROOM_ASSET_DIR, roomId);
+  removeAsset(roomTileDir("wide"), roomId);
   broadcastRoomsChanged();
   res.json({ ok: true });
 });
@@ -773,6 +803,8 @@ app.delete("/api/rooms/:roomId", (req, res) => {
 app.post("/api/rooms/:roomId/tile", upload.single("tile"), (req, res) => {
   const { roomId } = req.params;
   if (!roomsStore.allRoomIds().has(roomId)) return res.status(404).json({ error: `未知の部屋です: ${roomId}` });
+  const layout = parseLayout(req.query.layout);
+  if (!layout) return badLayout(res, req.query.layout);
   if (!req.file) return res.status(400).json({ error: "画像ファイルが送信されていません" });
   if (req.file.mimetype !== "image/png") return res.status(400).json({ error: "PNG形式の画像のみアップロードできます" });
   if (req.file.size > ROOM_TILE.maxBytes) {
@@ -792,15 +824,17 @@ app.post("/api/rooms/:roomId/tile", upload.single("tile"), (req, res) => {
     });
   }
 
-  saveAsset(ROOM_ASSET_DIR, roomId, req.file.buffer);
+  saveAsset(roomTileDir(layout), roomId, req.file.buffer);
   broadcastAssetChange("room", roomId);
-  res.json({ ok: true, ...roomTile(roomId) });
+  res.json({ ok: true, layout, ...roomTile(roomId, layout) });
 });
 
 app.delete("/api/rooms/:roomId/tile", (req, res) => {
   const { roomId } = req.params;
   if (!roomsStore.allRoomIds().has(roomId)) return res.status(404).json({ error: `未知の部屋です: ${roomId}` });
-  removeAsset(ROOM_ASSET_DIR, roomId);
+  const layout = parseLayout(req.query.layout);
+  if (!layout) return badLayout(res, req.query.layout);
+  removeAsset(roomTileDir(layout), roomId);
   broadcastAssetChange("room", roomId);
   res.json({ ok: true });
 });

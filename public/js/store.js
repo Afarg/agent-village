@@ -1,4 +1,5 @@
 // Tiny dependency-free pub/sub store shared between the Phaser scene and the DOM HUD.
+import { roomsUrl } from "./layout.js";
 
 // A character whose def carries `tools: []` (empty, explicitly declared) is
 // one of the decorative placeholder characters (test-character-*,
@@ -144,7 +145,7 @@ class Store {
   }
 
   async init() {
-    const [snapshotRes, roomsRes] = await Promise.all([fetch("/api/snapshot"), fetch("/api/rooms")]);
+    const [snapshotRes, roomsRes] = await Promise.all([fetch("/api/snapshot"), fetch(roomsUrl())]);
     const body = await snapshotRes.json();
     this.rooms = await roomsRes.json();
 
@@ -157,7 +158,7 @@ class Store {
 
   async ensureRooms() {
     if (!this.rooms) {
-      const res = await fetch("/api/rooms");
+      const res = await fetch(roomsUrl());
       this.rooms = await res.json();
     }
     return this.rooms;
@@ -187,7 +188,7 @@ class Store {
   }
 
   async refreshRooms() {
-    const res = await fetch("/api/rooms");
+    const res = await fetch(roomsUrl());
     this.rooms = await res.json();
     this.emit("rooms", { rooms: this.rooms });
   }

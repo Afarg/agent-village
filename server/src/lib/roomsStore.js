@@ -48,8 +48,9 @@ function getRaw() {
   return raw;
 }
 
-function getComputed() {
-  return computeLayout(raw.rooms, raw.breakRoom, raw.genericDesk, raw.layout || LAYOUT_CFG);
+// layout: "square" (mobile, default) | "wide" (desktop) — docs/design/14-desktop-layout.md
+function getComputed(layout = "square") {
+  return computeLayout(raw.rooms, raw.breakRoom, raw.genericDesk, raw.layout || LAYOUT_CFG, layout);
 }
 
 function roomIdSlug(label) {
