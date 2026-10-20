@@ -95,8 +95,16 @@ const BUBBLE_TEXT = "#2a1d14";
 // other (docs/design/09 §9). Gap between stacked boxes, in logical px.
 const STACK_GAP = 2;
 const BUBBLE_WRAP = 168; // px; wraps at about 15 full-width characters
+// Desktop rooms are wider but no taller (docs/design/14 §8.2), so bubbles
+// there try a flatter 2-line shape first and fall back to the narrow one.
+const BUBBLE_WRAP_WIDE = 272; // about 24 full-width characters
+const NARROW_SHAPE_COST = 12; // placement cost of not using the first shape
 const BUBBLE_MAX_CHARS = 48; // the full text is in the side panel / report view
 const EDGE_PAD = 6; // keeps labels on-canvas even while the character bobs/drifts a few px
+// Top part of a character's box that bubbles keep clear of (head + shoulders;
+// the placeholder head spans -0.37..-0.03 of the size around the center).
+const HEAD_ZONE = 0.55;
+const ROOM_PAD = 4; // labels stay this far below the speaker's room top (> BOB_PX, so a bob can't lift them out)
 const STACK_INTERVAL_MS = 100; // label placement pass rate (positions follow the character in between)
 // Idle/working characters bob up by this much. Placement is computed from the
 // un-bobbed position with this much extra gap, so two neighbors bobbing out
@@ -148,6 +156,7 @@ class VillageScene extends Phaser.Scene {
     const { w: roomW, h: roomH } = roomsConfig.breakRoom.rect;
     const rawSize = Math.floor((Math.min(roomW, roomH) / 3) * 0.9);
     this.charSize = Math.max(16, Math.floor(rawSize / 16) * 16);
+    this.bubbleWraps = roomsConfig.layout === "wide" ? [BUBBLE_WRAP_WIDE, BUBBLE_WRAP] : [BUBBLE_WRAP];
     this.selectedId = null;
     this.bubbleSeq = 0;
     this.lastStackAt = -Infinity;
@@ -469,7 +478,9 @@ class VillageScene extends Phaser.Scene {
       bubbleTail,
       bubbleBg,
       bubbleText,
-      bubbleBox: null, // { w, h, anchorY } of the bubble currently shown
+      bubbleBox: null, // { w, h, anchorY, shape } of the bubble currently shown
+      bubbleShapes: [], // { wrap, w, h } per wrap width in this.bubbleWraps
+      bubbleStyle: null, // { persistent, borderColor } (borderColor null = speaker color)
       bubbleSeq: 0, // ordering for "newest bubble in front"
       bubbleShift: { x: 0, y: 0 },
       selectRing,
@@ -539,84 +550,79 @@ class VillageScene extends Phaser.Scene {
     }
   }
 
+  // Room rect containing a point (null between rooms / outside the map).
+  roomRectAt(x, y) {
+    for (const room of this.allRoomDefs()) {
+      const r = room.rect;
+      if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) return r;
+    }
+    return null;
+  }
+
   // Keeps name tags and speech bubbles from covering each other: name tags
   // are placed first, then bubbles newest-first (so the newest one stays
   // closest to its speaker). A box that would overlap moves to the nearest
   // free spot next to the boxes in its way — up first, then sideways, below
-  // only as a last resort — always inside the canvas. Offsets are local to
-  // the character's container, so between passes they simply follow it.
-  // A box displaced on the previous pass keeps a few px of extra margin, so
-  // the gentle idle bob doesn't make it snap back and forth.
+  // only as a last resort. The spot is searched inside the speaker's own
+  // room first (docs/design/14 §8.2: back-row bubbles used to spill into the
+  // room above), and only when nothing fits there, anywhere on the canvas.
+  // Offsets are local to the character's container, so between passes they
+  // simply follow it. A box displaced on the previous pass keeps a few px of
+  // extra margin, so the gentle idle bob doesn't make it snap back and forth.
   stackLabels() {
     const items = [];
+    const size = this.charSize;
+    // Bubbles never cover their own speaker, nor anyone else's head and
+    // shoulders (the lower body is mostly behind a desk anyway), so it stays
+    // visible who is where and who is talking.
+    const heads = [];
     for (const entry of this.characters.values()) {
       // Bobbing characters are placed from their rest position, so the
       // result doesn't change from pass to pass while they bob.
       const cx = entry.container.x;
       const cy = entry.bobBaseY ?? entry.container.y;
+      const figure = { entry, x: cx - size * 0.3, y: cy - size / 2, w: size * 0.6, h: size };
+      if (entry.container.visible) heads.push({ ...figure, h: size * HEAD_ZONE });
+      const base = { entry, room: this.roomRectAt(cx, cy), figure };
       if (entry.nameText.visible) {
         const w = entry.nameText.displayWidth;
         const h = entry.nameText.displayHeight;
-        items.push({ entry, kind: "name", order: 0, x: cx - w / 2, y: cy + entry.nameBaseY - h, w, h, prev: entry.nameShift });
+        const shapes = [{ x: cx - w / 2, y: cy + entry.nameBaseY - h, w, h }];
+        items.push({ ...base, kind: "name", order: 0, shapes, prev: entry.nameShift, prevShape: 0 });
       }
       if (entry.bubbleBg.visible && entry.bubbleBox) {
-        const { w, h, anchorY } = entry.bubbleBox;
-        items.push({ entry, kind: "bubble", order: 1, seq: entry.bubbleSeq, x: cx - w / 2, y: cy + anchorY - h, w, h, prev: entry.bubbleShift });
+        const { anchorY, shape } = entry.bubbleBox;
+        const shapes = entry.bubbleShapes.map(({ w, h }) => ({ x: cx - w / 2, y: cy + anchorY - h, w, h }));
+        items.push({ ...base, kind: "bubble", order: 1, seq: entry.bubbleSeq, shapes, prev: entry.bubbleShift, prevShape: shape });
       }
     }
     items.sort((a, b) => a.order - b.order || (b.seq || 0) - (a.seq || 0));
 
-    const { width: maxX, height: maxY } = this.roomsConfig.canvas;
+    const { width: canvasW, height: canvasH } = this.roomsConfig.canvas;
+    const canvasArea = { x: 0, y: 0, w: canvasW, h: canvasH };
     const placed = [];
     for (const it of items) {
-      const displaced = !!(it.prev.x || it.prev.y);
       const others = placed.filter((p) => p.entry !== it.entry);
-      const fitsWith = (margin) => (x, y) =>
-        x >= 0 &&
-        y >= EDGE_PAD &&
-        x + it.w <= maxX &&
-        y + it.h <= maxY &&
-        !others.some((p) => x < p.x + p.w + margin && p.x < x + it.w + margin && y < p.y + p.h + margin && p.y < y + it.h + margin);
-      const gap = STACK_GAP + BOB_PX;
-      const fits = fitsWith(gap);
+      const solid =
+        it.kind === "bubble" ? [it.figure, ...heads.filter((p) => p.entry !== it.entry), ...placed.filter((p) => p.entry === it.entry)] : [];
+      const s0 = it.shapes[0];
+      const best =
+        (it.room && this.findLabelSpot(it, others, solid, it.room, ROOM_PAD)) ||
+        this.findLabelSpot(it, others, solid, canvasArea, EDGE_PAD) || {
+          shape: 0,
+          x: Math.min(Math.max(s0.x, 0), canvasW - s0.w),
+          y: Math.min(Math.max(s0.y, EDGE_PAD), canvasH - s0.h),
+        };
+      const s = it.shapes[best.shape];
+      placed.push({ entry: it.entry, x: best.x, y: best.y, w: s.w, h: s.h });
 
-      // Sticky: go home only when home is clearly free (extra margin for a
-      // box that was displaced), otherwise keep last pass's spot while it
-      // still works, and only search for a new one when it doesn't.
-      const home = displaced ? fitsWith(gap + 4)(it.x, it.y) : fits(it.x, it.y);
-      const kept = { x: it.x + it.prev.x, y: it.y + it.prev.y };
-      let best = { x: it.x, y: it.y };
-      if (!home && displaced && fits(kept.x, kept.y)) {
-        best = kept;
-      } else if (!home) {
-        const margin = gap;
-        const clampX = (x) => Math.min(Math.max(x, 0), maxX - it.w);
-        const xs = new Set([clampX(it.x)]);
-        const ys = new Set([Math.min(Math.max(it.y, EDGE_PAD), maxY - it.h)]);
-        for (const p of others) {
-          xs.add(p.x - it.w - margin).add(p.x + p.w + margin);
-          ys.add(p.y - it.h - margin).add(p.y + p.h + margin);
-        }
-        // moving down covers the speaker, so it costs more than up/sideways
-        const cost = (x, y) => Math.abs(x - it.x) * 1.5 + (y <= it.y ? it.y - y : (y - it.y) * 4);
-        let bestCost = Infinity;
-        for (const x of xs) for (const y of ys) {
-          const c = cost(x, y);
-          if (c < bestCost && fits(x, y)) {
-            bestCost = c;
-            best = { x, y };
-          }
-        }
-        if (bestCost === Infinity) best = { x: clampX(it.x), y: Math.min(Math.max(it.y, EDGE_PAD), maxY - it.h) };
-      }
-      placed.push({ ...it, ...best });
-
-      const shift = { x: Math.round(best.x - it.x), y: Math.round(best.y - it.y) };
+      const shift = { x: Math.round(best.x - s.x), y: Math.round(best.y - s.y) };
       if (it.kind === "name") {
         it.entry.nameShift = shift;
         it.entry.nameText.setPosition(shift.x, it.entry.nameBaseY + shift.y);
-      } else if (shift.x !== it.prev.x || shift.y !== it.prev.y) {
+      } else if (shift.x !== it.prev.x || shift.y !== it.prev.y || best.shape !== it.prevShape) {
         it.entry.bubbleShift = shift;
+        if (best.shape !== it.prevShape) this.drawBubbleShape(it.entry, best.shape);
         it.entry.bubbleBg.setPosition(shift.x, shift.y);
         it.entry.bubbleText.setPosition(shift.x, it.entry.bubbleBox.anchorY + shift.y);
         this.drawBubbleTail(it.entry);
@@ -631,8 +637,71 @@ class VillageScene extends Phaser.Scene {
     }
   }
 
-  // A bubble moved off its speaker gets a thin leader line back to the
-  // speaker's head, so it's still clear who is talking.
+  // Best spot for one label inside `area` (a room or the whole canvas), or
+  // null when none fits. Tries every shape (bubbles on the desktop layout
+  // have two). `solid` are boxes a bubble may touch but not cover: the
+  // speaker's figure and name tag (its natural spot sits right above those,
+  // so they don't count there) and the other characters' heads.
+  findLabelSpot(it, others, solid, area, topPad) {
+    const gap = STACK_GAP + BOB_PX;
+    const minX = area.x;
+    const maxX = area.x + area.w;
+    const minY = area.y + topPad;
+    const maxY = area.y + area.h;
+    const hits = (list, margin, x, y, s) =>
+      list.some((p) => x < p.x + p.w + margin && p.x < x + s.w + margin && y < p.y + p.h + margin && p.y < y + s.h + margin);
+    const inside = (x, y, s) => x >= minX && y >= minY && x + s.w <= maxX && y + s.h <= maxY;
+    solid = solid.filter((p) => p.x < maxX && minX < p.x + p.w && p.y < maxY && minY < p.y + p.h);
+    const othersSolid = solid.filter((p) => p.entry !== it.entry);
+    const fits = (x, y, s) => inside(x, y, s) && !hits(others, gap, x, y, s) && !hits(solid, 0, x, y, s);
+
+    // Sticky: go home only when home is clearly free (extra margin for a
+    // box that was displaced), otherwise keep last pass's spot while it
+    // still works, and only search for a new one when it doesn't.
+    const s0 = it.shapes[0];
+    const displaced = !!(it.prev.x || it.prev.y) || it.prevShape !== 0;
+    if (inside(s0.x, s0.y, s0) && !hits(others, displaced ? gap + 4 : gap, s0.x, s0.y, s0) && !hits(othersSolid, 0, s0.x, s0.y, s0)) {
+      return { shape: 0, x: s0.x, y: s0.y };
+    }
+    const sp = it.shapes[it.prevShape];
+    if (displaced && sp) {
+      const kept = { shape: it.prevShape, x: sp.x + it.prev.x, y: sp.y + it.prev.y };
+      if (fits(kept.x, kept.y, sp)) return kept;
+    }
+
+    let best = null;
+    let bestCost = Infinity;
+    it.shapes.forEach((s, shape) => {
+      const clampX = (x) => Math.min(Math.max(x, minX), maxX - s.w);
+      const clampY = (y) => Math.min(Math.max(y, minY), maxY - s.h);
+      const xs = new Set([clampX(s.x), minX, maxX - s.w]);
+      const ys = new Set([clampY(s.y), minY, maxY - s.h]);
+      for (const p of [...others, ...solid]) {
+        xs.add(p.x - s.w - gap).add(p.x + p.w + gap);
+        ys.add(p.y - s.h - gap).add(p.y + p.h + gap);
+      }
+      // Measured at the bottom edge, since the shapes share their bottom.
+      // Moving down covers the speaker, so it costs more than up/sideways.
+      const bottom = s.y + s.h;
+      const cost = (x, y) => {
+        const dy = y + s.h - bottom;
+        return Math.abs(x - s.x) * 1.5 + (dy <= 0 ? -dy : dy * 4) + shape * NARROW_SHAPE_COST;
+      };
+      for (const x of xs) for (const y of ys) {
+        const c = cost(x, y);
+        if (c < bestCost && fits(x, y, s)) {
+          bestCost = c;
+          best = { shape, x, y };
+        }
+      }
+    });
+    return best;
+  }
+
+  // A bubble moved off its speaker gets a leader line back to the speaker,
+  // in the speaker's color (docs/design/14 §8.4), so it's still clear who is
+  // talking: to the head when the bubble is above, to the figure's side when
+  // it was pushed beside or below.
   drawBubbleTail(entry) {
     const tail = entry.bubbleTail;
     tail.clear();
@@ -642,13 +711,23 @@ class VillageScene extends Phaser.Scene {
       return;
     }
     const { w, h, anchorY } = entry.bubbleBox;
-    const head = { x: 0, y: anchorY + 2 };
+    const reach = this.charSize * 0.3;
+    const above = anchorY + dy <= anchorY + 2;
+    const head = above
+      ? { x: 0, y: anchorY + 2 }
+      : { x: dx < 0 ? -reach : reach, y: Math.min(Math.max(anchorY + dy - h / 2, anchorY + 2), this.charSize * HEAD_Y) };
     // nearest point on the bubble's edge to the head
     const px = Math.min(Math.max(head.x, dx - w / 2), dx + w / 2);
     const py = Math.min(Math.max(head.y, anchorY + dy - h), anchorY + dy);
-    tail.lineStyle(1, BUBBLE_BORDER, 0.85);
+    // a dark casing under the color keeps pale colors visible on any floor
+    const color = colorInt(entry.agent.paletteMain);
+    tail.lineStyle(3, BUBBLE_BORDER, 0.9);
     tail.lineBetween(px, py, head.x, head.y);
-    tail.fillStyle(BUBBLE_BORDER, 0.85);
+    tail.fillStyle(BUBBLE_BORDER, 0.9);
+    tail.fillCircle(head.x, head.y, 2.5);
+    tail.lineStyle(1.5, color, 1);
+    tail.lineBetween(px, py, head.x, head.y);
+    tail.fillStyle(color, 1);
     tail.fillCircle(head.x, head.y, 1.5);
     tail.setVisible(true);
   }
@@ -854,29 +933,28 @@ class VillageScene extends Phaser.Scene {
   // `persistent: true` (docs/design/06-permission-wait-bubble.md §5.2) skips the
   // auto-hide timer — caller is responsible for calling hideBubble() once the
   // condition (pendingPermission) clears.
-  showBubble(entry, text, { persistent = false, borderColor = BUBBLE_BORDER } = {}) {
+  // borderColor null = the speaker's own color (docs/design/14 §8.4).
+  showBubble(entry, text, { persistent = false, borderColor = null } = {}) {
     if (entry.bubbleTimer) {
       entry.bubbleTimer.remove();
       entry.bubbleTimer = null;
     }
     const short = text.length > BUBBLE_MAX_CHARS ? `${text.slice(0, BUBBLE_MAX_CHARS - 1)}…` : text;
-    const anchorY = -(this.charSize / 2 + 18); // 28/20 = 1.4 -> (20/2+18)=28, the original ratio at CHAR_SIZE=20
-
-    entry.bubbleText.setText(short).setPosition(0, anchorY).setVisible(true);
-    const bounds = entry.bubbleText.getBounds();
-    const w = Math.max(36, bounds.width + 14);
-    const h = bounds.height + 10;
-
-    entry.bubbleBg.clear();
-    entry.bubbleBg.fillStyle(BUBBLE_FILL, 0.97);
-    entry.bubbleBg.lineStyle(persistent ? 2 : 1, borderColor, 1);
-    entry.bubbleBg.fillRoundedRect(-w / 2, anchorY - h, w, h, 5);
-    entry.bubbleBg.strokeRoundedRect(-w / 2, anchorY - h, w, h, 5);
-    entry.bubbleBg.setPosition(0, 0).setVisible(true);
-    entry.bubbleText.setPosition(0, anchorY);
-    entry.bubbleBox = { w, h, anchorY };
+    entry.bubbleText.setText(short).setPosition(0, 0).setVisible(true);
+    // One measured shape per wrap width; a wider wrap that gives the same
+    // box (a short line) isn't worth a second shape.
+    entry.bubbleShapes = [];
+    for (const wrap of this.bubbleWraps) {
+      entry.bubbleText.setWordWrapWidth(wrap, true);
+      const bounds = entry.bubbleText.getBounds();
+      const shape = { wrap, w: Math.max(36, bounds.width + 14), h: bounds.height + 10 };
+      if (!entry.bubbleShapes.some((s) => s.w === shape.w && s.h === shape.h)) entry.bubbleShapes.push(shape);
+    }
+    entry.bubbleStyle = { persistent, borderColor };
     entry.bubbleSeq = ++this.bubbleSeq;
     entry.bubbleShift = { x: 0, y: 0 };
+    this.drawBubbleShape(entry, 0);
+    entry.bubbleBg.setPosition(0, 0).setVisible(true);
     this.drawBubbleTail(entry);
     this.lastStackAt = -Infinity; // place it on the very next frame
 
@@ -887,6 +965,27 @@ class VillageScene extends Phaser.Scene {
         this.hideBubble(entry);
       });
     }
+  }
+
+  // Draws the bubble box for one of entry.bubbleShapes, bottom-anchored
+  // above the name tag, at the current bubbleShift. The border is a thin dark
+  // outline with a 2px band inside it in the speaker's color (or the bubble
+  // kind's color, e.g. amber for a permission wait), so a bubble pushed away
+  // from its speaker can still be matched to them.
+  drawBubbleShape(entry, index) {
+    const { wrap, w, h } = entry.bubbleShapes[index];
+    const { borderColor } = entry.bubbleStyle;
+    const anchorY = -(this.charSize / 2 + 18); // 28/20 = 1.4 -> (20/2+18)=28, the original ratio at CHAR_SIZE=20
+    entry.bubbleText.setWordWrapWidth(wrap, true);
+    entry.bubbleBg.clear();
+    entry.bubbleBg.fillStyle(BUBBLE_FILL, 0.97);
+    entry.bubbleBg.fillRoundedRect(-w / 2, anchorY - h, w, h, 5);
+    entry.bubbleBg.lineStyle(1, BUBBLE_BORDER, 1);
+    entry.bubbleBg.strokeRoundedRect(-w / 2, anchorY - h, w, h, 5);
+    entry.bubbleBg.lineStyle(2, borderColor ?? colorInt(entry.agent.paletteMain), 1);
+    entry.bubbleBg.strokeRoundedRect(-w / 2 + 1.5, anchorY - h + 1.5, w - 3, h - 3, 4);
+    entry.bubbleText.setPosition(entry.bubbleShift.x, anchorY + entry.bubbleShift.y);
+    entry.bubbleBox = { w, h, anchorY, shape: index };
   }
 
   hideBubble(entry) {
