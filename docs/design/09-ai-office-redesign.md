@@ -241,6 +241,7 @@
 | 2-6a ✅ | 未読の報告（バッジ・お知らせ・頭上の ✉・既読管理）、報告を作業（コンテキスト）ごとの区画にまとめ開始時刻を表示、機械用ログ（保存場所を設定可）。設計と検証は別紙 `12-unread-reports-and-machine-log.md` | `bin/agent-village-hook.js`、`server/src/lib/villageSettings.js`（新規）・`reportLog.js`、`index.js`、`public/js/unread.js`・`contexts.js`（新規）、`hud.js`、`reports.js`、`game.js`、`config.js`、`main.js`、`index.html`、`style.css` |
 | 2-6b ✅ | 一覧を部屋ごとにまとめて開閉（見出しに許可待ち・エラー・未読・作業中・応答なし？の数）、長く更新のない「作業中」を「応答なし？」として表示（しきい値は設定可）。設計と検証は別紙 `13-room-groups-and-stale.md` | `server/src/lib/villageSettings.js`、`index.js`、`public/js/store.js`、`hud.js`、`alerts.js`、`game.js`、`config.js`、`unread.js`、`main.js`、`style.css` |
 | 2-6c-0 ✅ | （ユーザー要望で追加、2026-10-19）デスクトップ用の横長（16:9、1236×696）の部屋配置・全画面表示・配置ごとの部屋画像。今の配置はモバイル用として残す。設計と検証は別紙 `14-desktop-layout.md` | `server/src/lib/layout.js`・`roomsStore.js`・`index.js`、`public/js/layout.js`（新規）、`store.js`、`game.js`、`hud.js`、`main.js`、`index.html`、`style.css` |
+| 2-6d ✅ | （ユーザー要望で追加、2026-10-20）ヘッダーの「導入のやり方」モーダル（フックの自動設定・キャラの導入の案内）と、構成画面の用語説明の小窓。別紙 `15-setup-guide-and-glossary.md` | `server/src/lib/hookSetup.js`（新規）、`index.js`、`public/js/glossary.js`・`setup.js`（新規）、`config.js`、`main.js`、`index.html`、`style.css` |
 | 2-6c | 詳細パネルとレポート画面の行き来、吹き出しのはみ出し対策（14 §8.3 で対応済み、2026-10-20）、タイムライン（レポート画面に横棒の表示を追加、2026-10-19 決定） | — |
 | 2-7 | 全体の検証（下記） | — |
 

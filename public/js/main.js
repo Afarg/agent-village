@@ -7,9 +7,12 @@ import { initProjects } from "./projects.js";
 import { initConfig } from "./config.js";
 import { initUnread } from "./unread.js";
 import { initLayoutControls } from "./layout.js";
+import { initGlossary } from "./glossary.js";
+import { initSetup } from "./setup.js";
 
 async function bootstrap() {
   initLayoutControls();
+  initGlossary();
   initHud();
   initAlerts();
   initProjects();
@@ -21,6 +24,7 @@ async function bootstrap() {
   initReports();
   await initGame("game-container");
   store.connectSSE();
+  initSetup();
 }
 
 bootstrap().catch((err) => {

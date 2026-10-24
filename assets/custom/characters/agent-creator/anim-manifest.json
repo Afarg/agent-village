@@ -1,0 +1,31 @@
+{
+  "characterId": "11af0759a018",
+  "views": {
+    "front": {
+      "idle": [
+        "front.png",
+        "front_blink.png"
+      ]
+    },
+    "diagonal_left": {
+      "idle": [
+        "diagonal_left.png",
+        "diagonal_left_blink.png"
+      ],
+      "walk": [
+        "diagonal_left_walk1.png",
+        "diagonal_left_walk2.png"
+      ]
+    },
+    "diagonal_right": {
+      "idle": [
+        "diagonal_right.png",
+        "diagonal_right_blink.png"
+      ],
+      "walk": [
+        "diagonal_right_walk1.png",
+        "diagonal_right_walk2.png"
+      ]
+    }
+  }
+}

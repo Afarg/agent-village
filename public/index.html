@@ -16,6 +16,7 @@
         <button class="tab-btn" data-view="reports" type="button">レポート</button>
         <button class="tab-btn" data-view="config" type="button">構成</button>
       </div>
+      <button class="btn setup-btn" id="setup-open-btn" type="button" aria-haspopup="dialog" aria-label="導入のやり方">🧭<span class="setup-label"> 導入のやり方</span><span class="setup-dot" id="setup-dot" hidden></span></button>
       <div id="status-summary" aria-live="polite"></div>
       <button class="btn" id="notify-toggle" type="button">🔕 通知オフ</button>
       <div id="layout-controls">
@@ -109,8 +110,8 @@
       <div id="config-toolbar">
         <div id="config-scope" role="group" aria-label="表示する範囲">
           <button type="button" data-scope="all">すべて</button>
-          <button type="button" data-scope="project">プロジェクト</button>
-          <button type="button" data-scope="user">ユーザー全体</button>
+          <button type="button" data-scope="project" data-term="scopeProject">プロジェクト</button>
+          <button type="button" data-scope="user" data-term="scopeUser">ユーザー全体</button>
         </div>
         <div id="config-summary"></div>
         <span id="config-root" class="config-root"></span>
@@ -123,6 +124,26 @@
     </section>
   </div>
 
+  <!-- 導入のやり方（docs/design/15-setup-guide-and-glossary.md §3） -->
+  <dialog id="setup-dialog" aria-labelledby="setup-title">
+    <div class="setup-inner">
+      <div class="setup-head">
+        <h2 id="setup-title">🧭 導入のやり方</h2>
+        <button class="setup-close" type="button" aria-label="閉じる">×</button>
+      </div>
+      <div class="setup-tabs" role="tablist">
+        <button type="button" role="tab" data-setup-tab="hooks">① フックの導入</button>
+        <button type="button" role="tab" data-setup-tab="chars">② エージェントキャラの導入</button>
+      </div>
+      <div class="setup-panel" id="setup-panel" role="tabpanel"></div>
+      <div class="setup-foot">
+        <label id="setup-dismiss-row"><input type="checkbox" id="setup-dismiss" /> このプロジェクトでは、次から自動で開かない</label>
+        <button class="btn setup-close" type="button">閉じる</button>
+      </div>
+    </div>
+  </dialog>
+  <!-- 用語説明の小窓（glossary.js） -->
+  <div id="term-pop" class="term-pop" role="tooltip" hidden></div>
   <script type="module" src="/js/main.js"></script>
 </body>
 </html>

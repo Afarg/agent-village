@@ -27,6 +27,7 @@ const decorStore = require("./lib/decorStore");
 const reportLog = require("./lib/reportLog");
 const projectRegistry = require("./lib/projectRegistry");
 const { readConfigOverview } = require("./lib/configOverview");
+const hookSetup = require("./lib/hookSetup");
 const villageSettings = require("./lib/villageSettings");
 
 // See docs/design/04-multi-project-integration.md for the install-root vs.
@@ -901,6 +902,43 @@ app.get("/api/config", (req, res) => {
     res.json(readConfigOverview(TARGET_ROOT));
   } catch (err) {
     res.status(500).json({ error: `構成の読み込みに失敗しました: ${err.message}` });
+  }
+});
+
+// ---- hook setup (docs/design/15-setup-guide-and-glossary.md §4) ------------------------------------------
+app.get("/api/setup/hooks", (req, res) => {
+  try {
+    res.json(hookSetup.status(TARGET_ROOT, INSTALL_ROOT));
+  } catch (err) {
+    res.status(500).json({ error: `フックの状態を読めませんでした: ${err.message}` });
+  }
+});
+
+// Writes a command Claude Code will run, so only JSON requests from this
+// dashboard's own pages are accepted (a cross-site form post can't send JSON,
+// and a cross-site fetch carries a foreign Origin).
+function sameOriginJson(req) {
+  if (!req.is("application/json")) return false;
+  const origin = req.get("origin");
+  if (!origin) return true;
+  try {
+    return new URL(origin).host === req.get("host");
+  } catch {
+    return false;
+  }
+}
+
+// Body: { action: "install" | "uninstall", target: "local" | "shared", dryRun }.
+app.post("/api/setup/hooks", (req, res) => {
+  if (!sameOriginJson(req)) return res.status(403).json({ error: "このダッシュボードの画面からのみ変更できます" });
+  const { action, target, dryRun } = req.body || {};
+  try {
+    const result = hookSetup.apply(TARGET_ROOT, INSTALL_ROOT, { action, target, dryRun: dryRun === true });
+    if (result.error && !result.after) return res.status(400).json({ error: result.error });
+    if (result.error) return res.status(500).json(result);
+    res.json({ ...result, status: hookSetup.status(TARGET_ROOT, INSTALL_ROOT) });
+  } catch (err) {
+    res.status(500).json({ error: `設定ファイルを書き換えられませんでした: ${err.message}` });
   }
 });
 

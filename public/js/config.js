@@ -3,6 +3,9 @@
 // で伏せ済みなので、ここでは受け取った文字列をエスケープして表示するだけ。
 // 項目はプロジェクト（.claude/）とユーザー全体（~/.claude/）の両方から来るので、
 // scope で見分けて印を付け、ツールバーで絞り込めるようにする。
+// 見出しや専門用語には「?」印を付け、意味を小窓で説明する（glossary.js、docs/design/15 §2）。
+
+import { term } from "./glossary.js";
 
 function escapeHtml(str) {
   return String(str ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -13,6 +16,7 @@ const MCP_STATUS = { enabled: ["有効", "ok"], disabled: ["無効", "off"], pen
 const SOURCE_STATUS = { ok: "読み込み済み", missing: "なし", error: "読めない" };
 
 const SCOPE_FILTERS = ["all", "project", "user"];
+const HOOK_EVENT_TERMS = { SubagentStart: "subagentStart", SubagentStop: "subagentStop", PermissionRequest: "permissionRequest" };
 const SCOPE_KEY = "agentVillage.configScope";
 
 let loading = false;
@@ -28,11 +32,11 @@ try {
 const none = () => `<p class="cfg-none">設定なし</p>`;
 const src = (s) =>
   s.startsWith("~/")
-    ? `<span class="cfg-src user" title="${escapeHtml(s)}">ユーザー全体</span>`
+    ? `<span class="cfg-src user" data-term="scopeUser">ユーザー全体</span>`
     : `<span class="cfg-src" title="出典">${escapeHtml(s.replace(".claude/", ""))}</span>`;
 const scopeChip = (it) =>
   it.scope === "user"
-    ? `<span class="cfg-scope" title="${escapeHtml(it.file || it.dir || "~/.claude/")}">ユーザー全体</span>${it.sameNameInProject ? `<span class="cfg-meta warn">同じ名前がプロジェクトにもあります</span>` : ""}`
+    ? `<span class="cfg-scope" data-term="scopeUser">ユーザー全体</span>${it.sameNameInProject ? `<span class="cfg-meta warn">同じ名前がプロジェクトにもあります</span>` : ""}`
     : "";
 const code = (s) => `<code>${escapeHtml(s)}</code>`;
 
@@ -60,17 +64,17 @@ function namedList(items, extra) {
 
 function agentsCard(c) {
   const body = namedList(c.agents, (a) => `${a.model ? `<span class="chip">${escapeHtml(a.model)}</span>` : ""}${a.tools ? `<span class="cfg-meta">ツール ${a.tools.length}</span>` : `<span class="cfg-meta">ツール すべて</span>`}`);
-  return card("agents", "エージェント", c.agents.length, body, `${code(".claude/agents/")}・${code("~/.claude/agents/")} の定義`);
+  return card("agents", term("agents", "エージェント"), c.agents.length, body, `${code(".claude/agents/")}・${code("~/.claude/agents/")} の定義`);
 }
 
 function skillsCard(c) {
   const body = namedList(c.skills, (s) => `<span class="cfg-meta">ファイル ${s.fileCount}</span>`);
-  return card("skills", "スキル", c.skills.length, body, `${code(".claude/skills/<名前>/SKILL.md")}・${code("~/.claude/skills/")}`);
+  return card("skills", term("skills", "スキル"), c.skills.length, body, `${code(".claude/skills/<名前>/SKILL.md")}・${code("~/.claude/skills/")}`);
 }
 
 function commandsCard(c) {
   const body = namedList(c.commands, (m) => (m.argumentHint ? `<span class="cfg-meta">${escapeHtml(m.argumentHint)}</span>` : ""));
-  return card("commands", "コマンド", c.commands.length, body, `${code(".claude/commands/")}・${code("~/.claude/commands/")} のスラッシュコマンド`);
+  return card("commands", term("commands", "コマンド"), c.commands.length, body, `${code(".claude/commands/")}・${code("~/.claude/commands/")} のスラッシュコマンド`);
 }
 
 const keyChips = (label, list) =>
@@ -90,21 +94,21 @@ function mcpCard(c) {
         })
         .join("")}</ul>`
     : none();
-  return card("mcp", "MCP サーバー", c.mcpServers.length, body, `${code(".mcp.json")}。状態は settings の承認設定から判定（未承認は起動時に確認が出る）。local・user 範囲で登録した MCP（${code("~/.claude.json")}）は表示しません`);
+  return card("mcp", term("mcp", "MCP サーバー"), c.mcpServers.length, body, `${code(".mcp.json")}。状態は settings の承認設定から判定（未承認は起動時に確認が出る）。local・user 範囲で登録した MCP（${code("~/.claude.json")}）は表示しません`);
 }
 
 function pluginsCard(c) {
   const rows = [
     ...c.plugins.map((p) => `<li class="cfg-row"><span class="cfg-name">${escapeHtml(p.id)}</span><span class="cfg-state ${p.enabled ? "ok" : "off"}">${p.enabled ? "有効" : "無効"}</span>${src(p.source)}</li>`),
-    ...c.marketplaces.map((m) => `<li class="cfg-row"><span class="cfg-name">${escapeHtml(m.name)}</span><span class="chip">マーケットプレイス</span><span class="cfg-mono">${escapeHtml(m.detail)}</span>${src(m.source)}</li>`),
+    ...c.marketplaces.map((m) => `<li class="cfg-row"><span class="cfg-name">${escapeHtml(m.name)}</span><span class="chip" data-term="marketplace">マーケットプレイス</span><span class="cfg-mono">${escapeHtml(m.detail)}</span>${src(m.source)}</li>`),
   ];
-  return card("plugins", "プラグイン", c.plugins.length, rows.length ? `<ul class="cfg-rows">${rows.join("")}</ul>` : none(), `settings の ${code("enabledPlugins")}・${code("extraKnownMarketplaces")}`);
+  return card("plugins", term("plugins", "プラグイン"), c.plugins.length, rows.length ? `<ul class="cfg-rows">${rows.join("")}</ul>` : none(), `settings の ${code("enabledPlugins")}・${code("extraKnownMarketplaces")}`);
 }
 
 function hooksCard(c, allHooks) {
   let body;
   if (!c.hooks.length && !allHooks.some((h) => h.agentVillage)) {
-    body = `${none()}<div class="cfg-note warn">エージェントの作業中・権限待ちを表示するには、Agent Village のフック（agent-village-hook）の設定が必要です（${code("docs/setup.md")} §10）。</div>`;
+    body = `${none()}<div class="cfg-note warn">エージェントの作業中・権限待ちを表示するには、Agent Village のフック（agent-village-hook）の設定が必要です。ヘッダーの<button type="button" class="link-btn" data-open-setup="hooks">🧭 導入のやり方</button>から設定できます。</div>`;
   } else if (!c.hooks.length) {
     body = none();
   } else {
@@ -112,18 +116,18 @@ function hooksCard(c, allHooks) {
     for (const h of c.hooks) byEvent.set(h.event, [...(byEvent.get(h.event) || []), h]);
     body = [...byEvent]
       .map(
-        ([event, list]) => `<div class="cfg-group"><div class="cfg-group-title">${escapeHtml(event)}</div><ul class="cfg-rows">${list
+        ([event, list]) => `<div class="cfg-group"><div class="cfg-group-title">${HOOK_EVENT_TERMS[event] ? term(HOOK_EVENT_TERMS[event], event) : escapeHtml(event)}</div><ul class="cfg-rows">${list
           .map(
-            (h) => `<li class="cfg-row">${h.matcher ? `<span class="chip" title="マッチャー">${escapeHtml(h.matcher)}</span>` : ""}<span class="cfg-mono">${escapeHtml(h.command || `(${h.type})`)}</span>${h.agentVillage ? `<span class="cfg-state ok">Agent Village</span>` : ""}${h.timeout != null ? `<span class="cfg-meta">${escapeHtml(h.timeout)}秒</span>` : ""}${src(h.source)}</li>`
+            (h) => `<li class="cfg-row">${h.matcher ? `<span class="chip" data-term="matcher">${escapeHtml(h.matcher)}</span>` : ""}<span class="cfg-mono">${escapeHtml(h.command || `(${h.type})`)}</span>${h.agentVillage ? `<span class="cfg-state ok">Agent Village</span>` : ""}${h.timeout != null ? `<span class="cfg-meta">${escapeHtml(h.timeout)}秒</span>` : ""}${src(h.source)}</li>`
           )
           .join("")}</ul></div>`
       )
       .join("");
-    if (!allHooks.some((h) => h.agentVillage)) body += `<div class="cfg-note warn">Agent Village のフック（agent-village-hook）が見つかりません。作業状態は表示されません（${code("docs/setup.md")} §10）。</div>`;
+    if (!allHooks.some((h) => h.agentVillage)) body += `<div class="cfg-note warn">Agent Village のフック（agent-village-hook）が見つかりません。作業状態は表示されません。<button type="button" class="link-btn" data-open-setup="hooks">🧭 導入のやり方</button>から設定できます。</div>`;
   }
   const userOnly = !c.hooks.some((h) => h.agentVillage) && allHooks.some((h) => h.agentVillage && h.scope === "user");
   if (userOnly && scopeFilter === "project") body += `<div class="cfg-note">Agent Village のフックはユーザー全体の設定（${code("~/.claude/settings.json")}）にあります。</div>`;
-  return card("hooks", "フック", c.hooks.length, body, "settings の " + code("hooks"));
+  return card("hooks", term("hooks", "フック"), c.hooks.length, body, "settings の " + code("hooks"));
 }
 
 function permissionsCard(c) {
@@ -137,25 +141,25 @@ function permissionsCard(c) {
     </details>`;
   };
   const total = p.allow.length + p.ask.length + p.deny.length;
-  const mode = p.defaultMode.length ? `<div class="cfg-kv"><span class="cfg-meta">既定のモード</span>${p.defaultMode.map((m) => `<span class="chip">${escapeHtml(m.value)}</span>${src(m.source)}`).join("")}</div>` : "";
-  const dirs = p.additionalDirectories.length ? `<div class="cfg-kv"><span class="cfg-meta">追加の作業フォルダ</span>${p.additionalDirectories.map((d) => `<span class="cfg-mono">${escapeHtml(d.rule)}</span>`).join("")}</div>` : "";
+  const mode = p.defaultMode.length ? `<div class="cfg-kv"><span class="cfg-meta">${term("defaultMode", "既定のモード")}</span>${p.defaultMode.map((m) => `<span class="chip">${escapeHtml(m.value)}</span>${src(m.source)}`).join("")}</div>` : "";
+  const dirs = p.additionalDirectories.length ? `<div class="cfg-kv"><span class="cfg-meta">${term("additionalDirectories", "追加の作業フォルダ")}</span>${p.additionalDirectories.map((d) => `<span class="cfg-mono">${escapeHtml(d.rule)}</span>`).join("")}</div>` : "";
   const body = `${mode}${dirs}<div class="cfg-perm-cols">${col("allow", "許可")}${col("ask", "確認")}${col("deny", "拒否")}</div>`;
-  return card("permissions", "権限", total, body, "settings の " + code("permissions") + `（${PERMISSION_OPEN_LIMIT}件を超える欄は閉じた状態で表示）`);
+  return card("permissions", term("permissions", "権限"), total, body, "settings の " + code("permissions") + `（${PERMISSION_OPEN_LIMIT}件を超える欄は閉じた状態で表示）`);
 }
 
 function envCard(c) {
   const body = c.env.length ? `<ul class="cfg-rows">${c.env.map((e) => `<li class="cfg-row"><span class="cfg-name">${escapeHtml(e.key)}</span><span class="cfg-mono">${escapeHtml(e.value)}</span>${src(e.source)}</li>`).join("")}</ul>` : none();
-  return card("env", "環境変数", c.env.length, body, "settings の " + code("env") + "。値は表示しません");
+  return card("env", term("env", "環境変数"), c.env.length, body, "settings の " + code("env") + "。値は表示しません");
 }
 
 function memoryCard(c) {
   const body = c.memory.length ? `<ul class="cfg-rows">${c.memory.map((m) => `<li class="cfg-row"><span class="cfg-mono">${escapeHtml(m.file)}</span><span class="cfg-meta">${m.lines}行</span></li>`).join("")}</ul>` : none();
-  return card("memory", "メモリ（CLAUDE.md）", c.memory.length, body, "ファイルの有無と行数のみ");
+  return card("memory", term("memory", "メモリ（CLAUDE.md）"), c.memory.length, body, "ファイルの有無と行数のみ");
 }
 
 function sourcesHtml(c) {
   return `<section class="cfg-card cfg-sources" id="cfg-sources">
-    <h3>読み込んだファイル</h3>
+    <h3>${term("sources", "読み込んだファイル")}</h3>
     <ul class="cfg-rows">${c.sources
       .map((s) => `<li class="cfg-row"><span class="cfg-mono">${escapeHtml(s.file)}</span><span class="cfg-state ${s.status === "ok" ? "ok" : s.status === "error" ? "err" : "off"}">${SOURCE_STATUS[s.status]}</span>${s.error ? `<span class="cfg-err">${escapeHtml(s.error)}</span>` : ""}</li>`)
       .join("")}</ul>
@@ -203,7 +207,7 @@ function render(full) {
   ];
   const errors = c.sources.filter((s) => s.status === "error").length;
   document.getElementById("config-summary").innerHTML =
-    sections.map(([id, label, n]) => `<button type="button" class="cfg-jump${n ? "" : " zero"}" data-target="cfg-${id}">${label}<b>${n}</b></button>`).join("") +
+    sections.map(([id, label, n]) => `<button type="button" class="cfg-jump${n ? "" : " zero"}" data-target="cfg-${id}" data-term="${id}">${label}<b>${n}</b></button>`).join("") +
     (errors ? `<button type="button" class="cfg-jump err" data-target="cfg-sources">読めないファイル<b>${errors}</b></button>` : "");
   document.getElementById("config-root").textContent = c.root;
   document.getElementById("config-root").title = c.root;
@@ -346,6 +350,10 @@ export function initConfig() {
   // edits made in the meantime show up.
   document.addEventListener("village:view", (e) => {
     if (e.detail.view === "config") load();
+  });
+  // hooks added/removed from the 導入のやり方 dialog: refresh the hooks card
+  document.addEventListener("village:hooks-changed", () => {
+    if (lastConfig) load();
   });
   document.getElementById("config-summary").addEventListener("click", (e) => {
     const b = e.target.closest(".cfg-jump");
