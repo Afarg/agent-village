@@ -25,9 +25,9 @@ Claude Code のサブエージェント群を、ピクセルアート風の「�
 }
 ```
 
-**After**: `npm start` して開いたダッシュボード。右側の一覧でエージェントの状態（作業中/待機中/割当済み）が一目で分かり、部屋の上には進捗ログの吹き出しがリアルタイムに表示される（下図は `npm run demo` のダミーデータで撮影）。
+**After**: `npm start` して開いたダッシュボード。部屋ごとに分かれたオフィスにキャラクターが配置され、右側の一覧（部屋ごとにまとめて開閉）でエージェントの状態（作業中/待機中/割当済み）が一目で分かる。作業中は部屋の上に進捗ログの吹き出しがリアルタイムに表示される（下図は `npm run demo` のダミーデータで撮影）。
 
-![Agent Village dashboard screenshot](docs/images/dashboard.jpg)
+![Agent Village dashboard screenshot](docs/images/dashboard.png)
 
 ## 図解: システム構成
 
@@ -163,6 +163,6 @@ npm run demo
 
 ## 既知の課題・改善計画
 
-今後の予定: 詳細パネルとレポート画面の行き来、タイムライン表示（2-6c）、全体の検証（2-7）。なお、冒頭のスクリーンショット（`docs/images/dashboard.jpg`）は旧デザインのままで、AIオフィス化後の画面への差し替えが未実施。
+今後の予定: 詳細パネルとレポート画面の行き来、タイムライン表示（2-6c）、全体の検証（2-7）。
 
 現状の課題と修正方針は [`IMPROVEMENTS.md`](IMPROVEMENTS.md) にまとめている。
